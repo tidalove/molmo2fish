@@ -1,0 +1,119 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai2-molmo2"
+dynamic = ["version"]
+readme = "README.md"
+description = "Multimodal Open Language Model (Molmo2)"
+authors = [
+    { name = "Allen Institute for Artificial Intelligence" }
+]
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "absl-py",
+    "cached_property",
+    "fiddle >= 0.2.5",
+    "numpy",
+    "torch",
+    "torchvision",
+    "omegaconf",
+    "rich",
+    "boto3",
+    "google-cloud-storage",
+    "tokenizers",
+    "packaging",
+    "cached_path>=1.6.4",
+    "transformers<5.0",
+    "datasets",
+    "huggingface_hub",
+    "sentencepiece",
+    "requests",
+    "einops",
+    "einops-exts",
+    "tqdm",
+    "gcsfs==2023.9.2",
+    "accelerate",
+
+    # These are all video libraries (all of which use FFMEGP) we have used at one point
+    # we largely use trochcodec now, but some older preprocessing scripts use other libraries
+    "imageio",
+    "imageio[pyav]",
+    "torchcodec>=0.0.7",
+    "decord2",
+    "av",
+    "moviepy",
+    "ffmpeg-python",
+    "spacy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy>=1.0,<1.4",
+    "black>=23.1,<24.0",
+    "isort>=5.12,<5.13",
+    "pytest",
+    "pytest-sphinx",
+    "twine>=1.11.0",
+    "setuptools",
+    "func_timeout",
+    "google-genai",
+    "wheel",
+    "build",
+]
+train = [
+    "wandb",
+    "beaker-py",
+    "beaker-gantry",
+    "click",
+    "torchmetrics",
+    "smashed[remote]>=0.21.1",
+    "safetensors",
+    "ffmpeg-python",
+    "moviepy",
+    "scikit-learn",
+    "msgspec>=0.14.0",
+    "openai",
+    "editdistance"
+]
+serve = [
+    "pydantic",
+    "uvicorn",
+    "gradio",
+    "fastapi",
+    "cloudflared-tunnel"
+]
+all = [
+    "ai2-molmo2[dev,train,serve]",
+]
+
+[project.urls]
+Homepage = "https://github.com/allenai/molmo"
+Repository = "https://github.com/allenai/molmo"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["olmo*"]
+exclude = [
+    "*.tests",
+    "*.tests.*",
+    "tests.*",
+    "tests",
+    "test_fixtures",
+    "test_fixtures.*",
+    "docs*",
+    "scripts*",
+    "olmo_tokenizer.*",
+    "evaluation.*",
+    "pretrain_data.*",
+    "tmp_*",
+    "inference.*",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "olmo.version.VERSION" }
