@@ -25,7 +25,7 @@ from olmo.data.academic_video_track_datasets import (
 from olmo.data.dataset import Dataset
 from olmo.data.molmo2_datasets import (
     Molmo2CaptionsEval, Molmo2SynCaptionsQA, Molmo2SynCaptionsSubtitleQA, Molmo2HumanQA,
-    Molmo2VideoPoint, Molmo2VideoPointEval, Molmo2VideoCountEval,
+    Molmo2VideoPoint, Molmo2VideoPointEval, Molmo2VideoCountEval, Molmo2Captions,
 )
 from olmo.data.molmo2_video_track_datasets import Molmo2VideoTrackInstruction, Molmo2VideoTrackEval
 from olmo.data.molmo_hardcode import Molmo2HardCodes
@@ -175,6 +175,14 @@ def get_dataset_by_name(dataset_name, split) -> Dataset:
         return Molmo2SynCaptionsSubtitleQA(split=split)
     if dataset_name == "molmo2_human_qa":
         return Molmo2HumanQA(split=split)
+    if dataset_name in ("molmo2_cap", "molmo2_captions", "vixmo3_top_level_captions_min_3"):
+        return Molmo2Captions(
+            split=split,
+            include_video_caption=True,
+            include_merged_caption=True,
+            include_video_frame_merged_caption=True,
+            min_score=3,
+        )
     if dataset_name.startswith("molmo2_video_point_minmax"):
         min_points = int(dataset_name.split("_")[4])
         max_points = int(dataset_name.split("_")[5])
