@@ -26,7 +26,7 @@
 This repository is for training and using Ai2's open vision language models, Molmo2 and MolmoPoint.
 Molmo2 is state-of-the-art among open-source models and demonstrates exceptional new capabilities in point-driven grounding in single image, multi-image, and video tasks as shown below.
 MolmoPoint is an extension with a new architecture for pointing.
-This README is mostly concerned with Molmo2, see [MolmoPoint](https://github.com/allenai/molmo2/MOLMO_POINT_README.md) 
+This README is mostly concerned with Molmo2, see [MolmoPoint](MOLMO_POINT_README.md) 
 for how to train MolmoPoint.
 
 
