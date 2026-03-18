@@ -9,7 +9,7 @@
     <img alt="GitHub License" src="https://img.shields.io/github/license/allenai/OLMo">
   </a>
   <a href="https://allenai.org/papers/molmopoint">
-    <img alt="Paper" src="https://img.shields.io/badge/MolmoPoint-papr-F0529C">
+    <img alt="Paper" src="https://img.shields.io/badge/MolmoPoint-papr-blue">
   </a>
   <a href="https://allenai.org/blog/molmopoint">
     <img alt="Blog Post" src="https://img.shields.io/badge/MolmoPoint-blog-F0529C">
