@@ -3,12 +3,18 @@
 import argparse
 import logging
 import sys
+from os.path import abspath, dirname
 from typing import List
 
+sys.path.insert(0, dirname(dirname(abspath(__file__))))
+
 from launch_scripts.sft import VIDEO_ACADEMIC_DATASETS, IMAGE_ACADEMIC_DATASETS
+from olmo.data.cfc_hf_datasets import CFC_HF_CLASSES
 from olmo.data.get_dataset import get_all_dataset_classes, get_dataset_class_by_name
 from olmo.util import prepare_cli_environment
 
+CFC_DATASETS = ["cfc_hf_track"] + [
+    cls.DATASET_NAME for cls in CFC_HF_CLASSES if cls.DATASET_NAME != "cfc_hf_track"]
 
 def download_datasets(datasets: List, n_procs: int = 8):
     failed_datasets = []
@@ -85,7 +91,11 @@ DATASET_GROUPS = {
         "latot_single_point_track",
         "tnl2k_single_point_track",
         "tnllt_single_point_track",
+
+        # cfc
+        *CFC_DATASETS,
     ],
+    "cfc": CFC_DATASETS,
     "demo": [
         "pixmo_ask_model_anything",
         "pixmo_cap",
@@ -118,8 +128,11 @@ Examples:
   # Download all datasets
   python {sys.argv[0]} all
 
-  # Download dataset group
+  # Download dataset group ({", ".join(DATASET_GROUPS)})
   python {sys.argv[0]} video_tracking
+
+  # Download CFC datasets
+  python {sys.argv[0]} cfc
 
   # Download with more parallel processes
   python {sys.argv[0]} text_vqa --n-procs 16

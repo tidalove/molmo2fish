@@ -107,12 +107,13 @@ def _load_hf_dataset(hf_source, split, local_name=None, config=None, overwrite_c
     return ds
 
 def get_image_files(image_folder):
+    from natsort import natsorted
     exts = ['jpg', 'jpeg', 'png', 'gif']
     files = []
     for ext in exts:
         files.extend(glob(os.path.join(image_folder, f'*.{ext}')))
         files.extend(glob(os.path.join(image_folder, f'*.{ext.upper()}')))
-    return sorted(files)
+    return natsorted(os.path.abspath(f) for f in files)
 
 def encode_frames_to_video(frames_dir, output_path, fps, native_fps:int=None,
                            start_frame=None, end_frame=None):
@@ -162,8 +163,9 @@ def encode_frames_to_video(frames_dir, output_path, fps, native_fps:int=None,
         "-safe", "0",
         "-r", str(fps),
         "-i", filelist_path,
-        "-c:v", "libopenh264",
+        "-c:v", "libx264",
         "-b:v", "4M",
+        "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         output_path,

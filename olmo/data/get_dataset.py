@@ -23,6 +23,20 @@ from olmo.data.academic_video_track_datasets import (
     LVOSv1, LVOSv2, LaSOT, UWCOT, WebUOT, LaTOT, TNL2K, TNLLT,
     WebUAV, GOT10k, VastTrack, TrackingNet
 )
+from olmo.data.cfc_hf_datasets import (
+    CFC_HF_DATASETS,  # {name: (class, kwargs)}
+    CFCTrackHF, CFCTargetedHF,
+    CFCSyntheticCorrectionFullHF, CFCSyntheticCorrectionVagueHF,
+    CFCSyntheticCorrectionWrongOnlyHF, CFCSyntheticCorrectionNoInfoHF,
+    CFCSyntheticCorrectionIncompleteHF,
+    CFCCorrectionRealFullEasyHF, CFCCorrectionRealWrongOnlyEasyHF,
+    CFCCorrectionRealVagueEasyHF, CFCCorrectionRealNoInfoEasyHF,
+    CFCCorrectionRealFullHardHF, CFCCorrectionRealWrongOnlyHardHF,
+    CFCCorrectionRealVagueHardHF, CFCCorrectionRealNoInfoHardHF,
+    CFCCorrectionRealYoloFullHF, CFCCorrectionRealYoloWrongOnlyHF,
+    CFCCorrectionRealYoloVagueHF, CFCCorrectionRealYoloNoInfoHF,
+    CFCTextHF,
+)
 from olmo.data.dataset import Dataset
 from olmo.data.molmo2_datasets import (
     Molmo2CaptionsEval, Molmo2SynCaptionsQA, Molmo2SynCaptionsSubtitleQA, Molmo2HumanQA,
@@ -408,8 +422,211 @@ def get_dataset_by_name(dataset_name, split) -> Dataset:
         return CharadesSTA(split=split, task="all")
     if dataset_name == "charades_sta_all_qa":
         return CharadesSTA(split=split, task="all", qa_format=True)
-    #### 
+    ####
     # Academic video object tracking datasets
+    # panaf: track
+    if dataset_name == "panaf_track":
+        return PanAf(split=split, task="track")
+    if dataset_name == "panaf_track_1fps":
+        return PanAf(split=split, task="track", sampling_fps=1)
+    if dataset_name == "panaf_track_eval_1fps": # Used for eval
+        return PanAf(split=split, task="track", sampling_fps=1)
+    # panaf_icl: in-context learning variant
+    if dataset_name == "panaf_icl_track":
+        return PanAfICL(split=split, task="track")
+    if dataset_name == "panaf_icl_track_eval_1fps":
+        return PanAfICL(split=split, task="track", sampling_fps=1)
+    # panaf_guided: caption-prepended variant
+    if dataset_name == "panaf_guided_track":
+        return PanAfGuided(split=split, task="track")
+    if dataset_name == "panaf_guided_track_eval_1fps":
+        return PanAfGuided(split=split, task="track", sampling_fps=1)
+    # cfc: track
+    if dataset_name == "cfc_track":
+        return CFC(split=split, task="track")
+    if dataset_name == "cfc_track_1fps":
+        return CFC(split=split, task="track", sampling_fps=1)
+    if dataset_name == "cfc_track_eval_1fps":
+        return CFC(split=split, task="track", sampling_fps=1)
+    if dataset_name == "cfc_track_eval_2fps":
+        return CFC(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_track_fixed_prompt_eval_2fps":
+        return CFCFixedPrompt(split=split, task="track", sampling_fps=2)
+    # cfc v1 (chunking aug) + v2 (token-budget chunks): use CFC class with renamed splits
+    if dataset_name == "cfc_track_v1":
+        return CFC(split=split, task="track")
+    if dataset_name == "cfc_track_v1_eval_1fps":
+        return CFC(split=split, task="track", sampling_fps=1)
+    if dataset_name == "cfc_track_v1_eval_2fps":
+        return CFC(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_track_v2":
+        return CFC(split=split, task="track")
+    if dataset_name == "cfc_track_v2_eval_1fps":
+        return CFC(split=split, task="track", sampling_fps=1)
+    if dataset_name == "cfc_track_v2_eval_2fps":
+        return CFC(split=split, task="track", sampling_fps=2)
+    # cfc_text: text-only correction QA (no video)
+    if dataset_name == "cfc_text":
+        return CFCText(split=split, task="track")
+    if dataset_name == "cfc_text_eval_2fps":
+        return CFCText(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_target_track_eval_2fps":
+        return CFCTargeted(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_target":
+        return CFCTargeted(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_guided":
+        return CFCGuided(split=split, task="track")
+    if dataset_name == "cfc_guided_track_eval_2fps":
+        return CFCGuided(split=split, task="track", sampling_fps=2)
+    # cfc: multi-turn
+    if dataset_name == "cfc_multi":
+        return CFCMultiTurn(split=split, task="track", sampling_fps=1)
+    # cfc synthetic-correction tier variants (full / vague / wrong-only / no-info)
+    if dataset_name == "cfc_synthetic_correction_full":
+        return CFCCorrectionSyntheticFull(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_full_eval_2fps":
+        return CFCCorrectionSyntheticFull(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_vague":
+        return CFCCorrectionSyntheticVague(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_vague_eval_2fps":
+        return CFCCorrectionSyntheticVague(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_wrong_only":
+        return CFCCorrectionSyntheticWrongOnly(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_wrong_only_eval_2fps":
+        return CFCCorrectionSyntheticWrongOnly(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_no_info":
+        return CFCCorrectionSyntheticNoInfo(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_no_info_eval_2fps":
+        return CFCCorrectionSyntheticNoInfo(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_incomplete":
+        return CFCCorrectionSyntheticIncomplete(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_incomplete_eval_2fps":
+        return CFCCorrectionSyntheticIncomplete(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_incomplete_no_info":
+        return CFCCorrectionSyntheticIncompleteNoInfo(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_incomplete_no_info_eval_2fps":
+        return CFCCorrectionSyntheticIncompleteNoInfo(split=split, task="track", sampling_fps=2)
+    # Corruption-filtered subsets (excl = no split_gap/swap/near_dup; incl = >=1)
+    if dataset_name == "cfc_synthetic_correction_full_excl":
+        return CFCCorrectionSyntheticFullExcl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_full_excl_eval_2fps":
+        return CFCCorrectionSyntheticFullExcl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_full_incl":
+        return CFCCorrectionSyntheticFullIncl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_full_incl_eval_2fps":
+        return CFCCorrectionSyntheticFullIncl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_vague_excl":
+        return CFCCorrectionSyntheticVagueExcl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_vague_excl_eval_2fps":
+        return CFCCorrectionSyntheticVagueExcl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_vague_incl":
+        return CFCCorrectionSyntheticVagueIncl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_vague_incl_eval_2fps":
+        return CFCCorrectionSyntheticVagueIncl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_wrong_only_excl":
+        return CFCCorrectionSyntheticWrongOnlyExcl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_wrong_only_excl_eval_2fps":
+        return CFCCorrectionSyntheticWrongOnlyExcl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_wrong_only_incl":
+        return CFCCorrectionSyntheticWrongOnlyIncl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_wrong_only_incl_eval_2fps":
+        return CFCCorrectionSyntheticWrongOnlyIncl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_no_info_excl":
+        return CFCCorrectionSyntheticNoInfoExcl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_no_info_excl_eval_2fps":
+        return CFCCorrectionSyntheticNoInfoExcl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_no_info_incl":
+        return CFCCorrectionSyntheticNoInfoIncl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_no_info_incl_eval_2fps":
+        return CFCCorrectionSyntheticNoInfoIncl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_incomplete_excl":
+        return CFCCorrectionSyntheticIncompleteExcl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_incomplete_excl_eval_2fps":
+        return CFCCorrectionSyntheticIncompleteExcl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_synthetic_correction_incomplete_incl":
+        return CFCCorrectionSyntheticIncompleteIncl(split=split, task="track")
+    if dataset_name == "cfc_synthetic_correction_incomplete_incl_eval_2fps":
+        return CFCCorrectionSyntheticIncompleteIncl(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_full_easy":
+        return CFCCorrectionRealFullEasy(split=split, task="track")
+    if dataset_name == "cfc_correction_real_full_easy_eval_2fps":
+        return CFCCorrectionRealFullEasy(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_wrong_only_easy":
+        return CFCCorrectionRealWrongOnlyEasy(split=split, task="track")
+    if dataset_name == "cfc_correction_real_wrong_only_easy_eval_2fps":
+        return CFCCorrectionRealWrongOnlyEasy(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_vague_easy":
+        return CFCCorrectionRealVagueEasy(split=split, task="track")
+    if dataset_name == "cfc_correction_real_vague_easy_eval_2fps":
+        return CFCCorrectionRealVagueEasy(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_no_info_easy":
+        return CFCCorrectionRealNoInfoEasy(split=split, task="track")
+    if dataset_name == "cfc_correction_real_no_info_easy_eval_2fps":
+        return CFCCorrectionRealNoInfoEasy(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_full_hard":
+        return CFCCorrectionRealFullHard(split=split, task="track")
+    if dataset_name == "cfc_correction_real_full_hard_eval_2fps":
+        return CFCCorrectionRealFullHard(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_wrong_only_hard":
+        return CFCCorrectionRealWrongOnlyHard(split=split, task="track")
+    if dataset_name == "cfc_correction_real_wrong_only_hard_eval_2fps":
+        return CFCCorrectionRealWrongOnlyHard(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_vague_hard":
+        return CFCCorrectionRealVagueHard(split=split, task="track")
+    if dataset_name == "cfc_correction_real_vague_hard_eval_2fps":
+        return CFCCorrectionRealVagueHard(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_no_info_hard":
+        return CFCCorrectionRealNoInfoHard(split=split, task="track")
+    if dataset_name == "cfc_correction_real_no_info_hard_eval_2fps":
+        return CFCCorrectionRealNoInfoHard(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_yolo_full":
+        return CFCCorrectionRealYOLOFull(split=split, task="track")
+    if dataset_name == "cfc_correction_real_yolo_full_eval_2fps":
+        return CFCCorrectionRealYOLOFull(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_yolo_no_info":
+        return CFCCorrectionRealYOLONoInfo(split=split, task="track")
+    if dataset_name == "cfc_correction_real_yolo_no_info_eval_2fps":
+        return CFCCorrectionRealYOLONoInfo(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_yolo_vague":
+        return CFCCorrectionRealYOLOVague(split=split, task="track")
+    if dataset_name == "cfc_correction_real_yolo_vague_eval_2fps":
+        return CFCCorrectionRealYOLOVague(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_real_yolo_wrong_only":
+        return CFCCorrectionRealYOLOWrongOnly(split=split, task="track")
+    if dataset_name == "cfc_correction_real_yolo_wrong_only_eval_2fps":
+        return CFCCorrectionRealYOLOWrongOnly(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_kenai_channel":
+        return CFCCorrectionKenaiChannel(split=split, task="track")
+    if dataset_name == "cfc_correction_kenai_channel_eval_2fps":
+        return CFCCorrectionKenaiChannel(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_kenai_channel_full":
+        return CFCCorrectionKenaiChannelFull(split=split, task="track")
+    if dataset_name == "cfc_correction_kenai_channel_full_eval_2fps":
+        return CFCCorrectionKenaiChannelFull(split=split, task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_kenai_channel_no_info":
+        return CFCCorrectionKenaiChannelNoInfo(split=split, task="track")
+    if dataset_name == "cfc_correction_kenai_channel_no_info_eval_2fps":
+        return CFCCorrectionKenaiChannelNoInfo(split=split, task="track", sampling_fps=2)
+    # cfc: eel held-out river synthetic point-corruption correction tiers (split hardwired)
+    if dataset_name == "cfc_correction_eel_minimum":
+        return CFCCorrectionEelMinimum(split="eel", task="track")
+    if dataset_name == "cfc_correction_eel_minimum_eval_2fps":
+        return CFCCorrectionEelMinimum(split="eel", task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_eel_maximum":
+        return CFCCorrectionEelMaximum(split="eel", task="track")
+    if dataset_name == "cfc_correction_eel_maximum_eval_2fps":
+        return CFCCorrectionEelMaximum(split="eel", task="track", sampling_fps=2)
+    if dataset_name == "cfc_correction_eel_even":
+        return CFCCorrectionEelEven(split="eel", task="track")
+    if dataset_name == "cfc_correction_eel_even_eval_2fps":
+        return CFCCorrectionEelEven(split="eel", task="track", sampling_fps=2)
+    # cfc_hf: HuggingFace-backed CFC datasets (scripts/build_cfc_hf_dataset.py,
+    # olmo/data/cfc_hf_datasets.py). Same formats as the local cfc_* datasets
+    # above but loading from the hub release (2fps annotations, inline masks).
+    # Standalone path: these classes do not derive from the CFC classes above.
+    if dataset_name in CFC_HF_DATASETS:
+        cls, kwargs = CFC_HF_DATASETS[dataset_name]
+        return cls(split=split, **kwargs)
     # mevis: track, ground, single_point_track
     if dataset_name == "mevis_track": # Uses [1,2] sampling fps by default.
         return Mevis(split=split, task="track")
@@ -423,6 +640,10 @@ def get_dataset_by_name(dataset_name, split) -> Dataset:
         return Mevis(split=split, task="single_point_track")
     if dataset_name == "mevis_track_eval_1fps": # Used for eval
         return Mevis(split=split, task="track", sampling_fps=1)
+    if dataset_name == "mevis_caption":
+        return MevisCaption(split=split)
+    if dataset_name == "mevis_caption_mask":
+        return MevisCaption(split=split, video_mode="gt_mask")
     if dataset_name == "mevis_valid_track_eval_1fps": # Used for codalab submission
         return MevisChallenge(task="track", sampling_fps=1)
     # ref_yt_vos: track
