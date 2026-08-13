@@ -17,7 +17,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers.activations import get_activation
 
 from olmo.config import BaseConfig, StrEnum, D
-from olmo.nn.llm import AttentionType, ActivationType
+from olmo.nn.llm import AttentionType, ActivationType, LoRALinear
 from olmo.torch_util import get_global_rank
 from olmo.util import resource_path
 
@@ -184,17 +184,15 @@ class ViTMultiHeadDotProductAttention(nn.Module):
         self.sdpa_backend_list = sdpa_backend_list
 
     def reset_parameters(self):
-        nn.init.normal_(self.wq.weight, std=self.initializer_range)
-        nn.init.normal_(self.wk.weight, std=self.initializer_range)
-        nn.init.normal_(self.wv.weight, std=self.initializer_range)
-        if self.wo is not None:
-            nn.init.normal_(self.wo.weight, std=self.initializer_range)
-        if self.use_bias:
-            nn.init.constant_(self.wq.bias, 0)
-            nn.init.constant_(self.wk.bias, 0)
-            nn.init.constant_(self.wv.bias, 0)
-            if self.wo is not None:
-                nn.init.constant_(self.wo.bias, 0)
+        for proj in (self.wq, self.wk, self.wv, self.wo):
+            if proj is None:
+                continue
+            base = proj.og_linear if isinstance(proj, LoRALinear) else proj
+            nn.init.normal_(base.weight, std=self.initializer_range)
+            if self.use_bias:
+                nn.init.constant_(base.bias, 0)
+            if isinstance(proj, LoRALinear):
+                proj.reset_parameters()
 
     def _split_heads(self, hidden_states, num_heads) -> torch.Tensor:
         return hidden_states.reshape(hidden_states.shape[:2] + (num_heads, self.head_dim))
@@ -291,10 +289,16 @@ class ViTMLP(nn.Module):
 
     def reset_parameters(self):
         v_cfg = self.config
-        nn.init.trunc_normal_(self.w1.weight, std=math.sqrt(1 / v_cfg.image_emb_dim), a=-2.0, b=2.0)
-        nn.init.trunc_normal_(self.w2.weight, std=math.sqrt(1 / v_cfg.image_mlp_dim), a=-2.0, b=2.0)
-        nn.init.zeros_(self.w1.bias)
-        nn.init.zeros_(self.w2.bias)
+        w1 = self.w1.og_linear if isinstance(self.w1, LoRALinear) else self.w1
+        w2 = self.w2.og_linear if isinstance(self.w2, LoRALinear) else self.w2
+        nn.init.trunc_normal_(w1.weight, std=math.sqrt(1 / v_cfg.image_emb_dim), a=-2.0, b=2.0)
+        nn.init.trunc_normal_(w2.weight, std=math.sqrt(1 / v_cfg.image_mlp_dim), a=-2.0, b=2.0)
+        nn.init.zeros_(w1.bias)
+        nn.init.zeros_(w2.bias)
+        if isinstance(self.w1, LoRALinear):
+            self.w1.reset_parameters()
+        if isinstance(self.w2, LoRALinear):
+            self.w2.reset_parameters()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.w1(x)

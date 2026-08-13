@@ -891,6 +891,7 @@ class Trainer:
             "connector": self.cfg.optimizer.connector_learning_rate,
             "vit": self.cfg.optimizer.vit_learning_rate,
             "llm": self.cfg.optimizer.llm_learning_rate,
+            "lora": self.cfg.optimizer.lora_learning_rate,
             "frame_selector": self.cfg.optimizer.frame_selector_learning_rate,
         }
         for group in self.optim.param_groups:

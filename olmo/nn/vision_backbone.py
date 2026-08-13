@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from olmo.config import BaseConfig, D, StrEnum
 from olmo.nn.cp_load_balancer import CPLoadBalancerType, CPLoadBalancer
 from olmo.nn.image_vit import VitConfig, VisionTransformer
-from olmo.nn.llm import Activation
+from olmo.nn.llm import Activation, LoRALinear
 from olmo.preprocessing.image_preprocessor import ImagePreprocessor
 from olmo.torch_util import freeze_module
 
@@ -93,10 +93,20 @@ class MolmoVisionBackboneConfig(BaseConfig):
 
     normalize_on_gpu: bool = False
     """Run image normalization on the GPU
-    
-    Does this will allow image loading to keep the images in uint8 which will reduce 
+
+    Does this will allow image loading to keep the images in uint8 which will reduce
     RAM/shared memory usage significantly
     """
+
+    lora_vit: bool = False
+    """Fine-tune the ViT with LoRA (wraps the attention/MLP linears with LoRALinear adapters)"""
+
+    lora_connector: bool = False
+    """Fine-tune the connector (pooling + projector) with LoRA"""
+
+    lora_rank: int = 16
+    lora_alpha: float = 32.0
+    lora_dropout: float = 0.05
 
     def __post_init__(self):
         self.vit_layers = tuple(self.vit_layers)  # type: ignore[assignment]
@@ -162,9 +172,11 @@ class ImageProjectorMLP(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def reset_parameters(self):
-        nn.init.normal_(self.w1.weight, std=self.initializer_range)
-        nn.init.normal_(self.w2.weight, std=self.initializer_range)
-        nn.init.normal_(self.w3.weight, std=self.initializer_range)
+        for proj in (self.w1, self.w2, self.w3):
+            base = proj.og_linear if isinstance(proj, LoRALinear) else proj
+            nn.init.normal_(base.weight, std=self.initializer_range)
+            if isinstance(proj, LoRALinear):
+                proj.reset_parameters()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.w2(self.act(self.w1(x), self.w3(x)))
@@ -235,6 +247,50 @@ class MolmoVisionBackbone(nn.Module):
                 raise ValueError(config.image_padding_embed)
         self._cp_load_balancer: Optional[CPLoadBalancer] = None
 
+        if config.lora_vit:
+            self._apply_lora_vit()
+        if config.lora_connector:
+            self._apply_lora_connector()
+
+    def _apply_lora(self, parent: nn.Module, names):
+        """Wrap the named nn.Linear submodules of `parent` in LoRALinear adapters in-place."""
+        cfg = self.config
+        for name in names:
+            # Resolve dotted name to (owner_module, attr) so we can skip None targets
+            # (e.g. attention `wo` is None when out_dim == -1).
+            owner = parent
+            attr = name
+            if "." in name:
+                parent_path, attr = name.rsplit(".", 1)
+                owner = parent.get_submodule(parent_path)
+            target = getattr(owner, attr)
+            if target is None:
+                continue
+            lora_module = LoRALinear(
+                target, config=cfg, layer_id=0,
+                rank=cfg.lora_rank, alpha=cfg.lora_alpha, dropout=cfg.lora_dropout,
+            )
+            setattr(owner, attr, lora_module)
+
+    def _apply_lora_vit(self):
+        for block in self.image_vit.transformer.resblocks:
+            self._apply_lora(block, [
+                "attention.wq", "attention.wk", "attention.wv", "attention.wo",
+                "feed_forward.w1", "feed_forward.w2",
+            ])
+
+    def _apply_lora_connector(self):
+        if self.image_pooling_2d is not None:
+            self._apply_lora(self.image_pooling_2d, ["wq", "wk", "wv", "wo"])
+        if self.config.image_projector == ImageProjectType.mlp:
+            self._apply_lora(self.image_projector, ["w1", "w2", "w3"])
+        elif self.config.image_projector in [ImageProjectType.linear, ImageProjectType.random_linear]:
+            cfg = self.config
+            self.image_projector = LoRALinear(
+                self.image_projector, config=cfg, layer_id=0,
+                rank=cfg.lora_rank, alpha=cfg.lora_alpha, dropout=cfg.lora_dropout,
+            )
+
     def build_connector(self, llm_config, device):
         config = self.config
         input_dim: int = None
@@ -287,9 +343,15 @@ class MolmoVisionBackbone(nn.Module):
             for module in self.image_projector:
                 module.reset_parameters()
         elif self.config.image_projector == "linear":
-            nn.init.xavier_uniform_(self.image_projector.weight)
+            base = self.image_projector.og_linear if isinstance(self.image_projector, LoRALinear) else self.image_projector
+            nn.init.xavier_uniform_(base.weight)
+            if isinstance(self.image_projector, LoRALinear):
+                self.image_projector.reset_parameters()
         elif self.config.image_projector in [ImageProjectType.random_linear]:
-            nn.init.uniform_(self.image_projector.weight, -0.02, 0.02)
+            base = self.image_projector.og_linear if isinstance(self.image_projector, LoRALinear) else self.image_projector
+            nn.init.uniform_(base.weight, -0.02, 0.02)
+            if isinstance(self.image_projector, LoRALinear):
+                self.image_projector.reset_parameters()
         else:
             self.image_projector.reset_parameters()
 

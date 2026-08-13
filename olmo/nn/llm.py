@@ -335,6 +335,22 @@ class LlmConfig(BaseConfig):
     The transformer block implementation.
     """
 
+    lora: bool = False
+    """
+    Whether to fine-tune with LoRA (wraps target modules with LoRALinear adapters).
+    """
+
+    lora_merge_on_save: bool = True
+    """
+    Whether to merge LoRA weights into base weights when saving an unsharded checkpoint.
+    When True, the saved checkpoint has standard keys and is loadable without LoRA modules.
+    When False, the checkpoint preserves LoRA structure (separate A/B params).
+    """
+
+    lora_rank: int = 16
+    lora_alpha: float = 32.0
+    lora_dropout: float = 0.05
+
     rope: bool = False
     """
     Use rotary positional embeddings (RoPE). Mutually exclusive with ``alibi``.
@@ -690,6 +706,28 @@ class LlmConfig(BaseConfig):
                 del config[key]
         return config
 
+def remap_state_dict_for_lora(state_dict: dict, model: nn.Module) -> dict:
+    """Remap vanilla checkpoint keys to match LoRA-wrapped model structure.
+
+    Pretrained checkpoints have keys like 'blocks.0.att_proj.weight', but a LoRA-wrapped
+    model expects 'blocks.0.att_proj.og_linear.weight'. This function adds the 'og_linear.'
+    prefix for any module that is a LoRALinear wrapper.
+    """
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, (LoRALinear, LoRAProjectWithExtra)):
+            lora_module_names.add(name)
+
+    remapped = {}
+    for key, value in state_dict.items():
+        parts = key.rsplit(".", 1)  # e.g. ["blocks.0.att_proj", "weight"]
+        if len(parts) == 2 and parts[0] in lora_module_names:
+            remapped[f"{parts[0]}.og_linear.{parts[1]}"] = value
+        else:
+            remapped[key] = value
+    return remapped
+
+
 class Llm(nn.Module):
     def __init__(self, config: LlmConfig, cache, device):
         super().__init__()
@@ -719,6 +757,15 @@ class Llm(nn.Module):
                     bias=config.include_bias,
                     device=device,
                     )
+                if config.lora:
+                    self.ff_out = LoRAProjectWithExtra(
+                        self.ff_out,
+                        config=config,
+                        layer_id=config.n_layers,
+                        rank=config.lora_rank,
+                        alpha=config.lora_alpha,
+                        dropout=config.lora_dropout
+                    )
             else:
                 self.ff_out = nn.Linear(
                     config.d_model,
@@ -726,6 +773,12 @@ class Llm(nn.Module):
                     bias=config.include_bias,
                     device=device,
                 )
+                if config.lora:
+                    self.ff_out = LoRALinear(
+                        self.ff_out, config=config, layer_id=config.n_layers,
+                        rank=config.lora_rank, alpha=config.lora_alpha,
+                        dropout=config.lora_dropout,
+                    )
 
     def reset_parameters(self) -> None:
         if self.config.additional_vocab_size:
@@ -747,7 +800,10 @@ class Llm(nn.Module):
 
         self.ln_f.reset_parameters()
         if hasattr(self, "ff_out"):
-            init_weights(self.config, self.ff_out, type_of_module=ModuleType.final_out)
+            ff_out_target = self.ff_out.og_linear if isinstance(self.ff_out, (LoRALinear, LoRAProjectWithExtra)) else self.ff_out
+            init_weights(self.config, ff_out_target, type_of_module=ModuleType.final_out)
+            if isinstance(self.ff_out, (LoRALinear, LoRAProjectWithExtra)):
+                self.ff_out.reset_parameters()
         for block in self.blocks:
             block.reset_parameters()
 
@@ -775,6 +831,8 @@ class Llm(nn.Module):
                     state_dict = {k[len("transformer."):]: v for k, v in state_dict.items()}
                 if "wte.weight" in state_dict and self.config.additional_vocab_size:
                     state_dict["wte.embedding"] = state_dict.pop("wte.weight")
+                if self.config.lora:
+                    state_dict = remap_state_dict_for_lora(state_dict, self)
                 log.info("Checkpoint loaded to CPU RAM")
             else:
                 state_dict = {}
@@ -809,11 +867,24 @@ class Llm(nn.Module):
                 key_errors = self.load_state_dict(state_dict, strict=False)
 
             assert len(key_errors.unexpected_keys) == 0
-            assert set(key_errors.missing_keys) <= {"wte.new_embedding"}
+            if self.config.lora:
+                # LoRA A/B params are expected to be missing (they're initialized, not loaded)
+                allowed_missing = {k for k in key_errors.missing_keys
+                                   if k.endswith(".A") or k.endswith(".B")}
+                actual_missing = set(key_errors.missing_keys) - allowed_missing
+                assert actual_missing <= {"wte.new_embedding"}
+            else:
+                assert set(key_errors.missing_keys) <= {"wte.new_embedding"}
             log.info(f"Done in {time.perf_counter()-t0:0.1f} seconds")
 
             if self.config.additional_vocab_size is not None:
                 nn.init.normal_(self.wte.new_embedding, std=self.config.new_embedding_init_range)
+
+            if self.config.lora:
+                # Initialize LoRA A/B params (not loaded from pretrained checkpoint)
+                for module in self.modules():
+                    if isinstance(module, (LoRALinear, LoRAProjectWithExtra)):
+                        module.reset_parameters()
 
     def apply_fsdp2(self, **kwargs):
         for block in self.blocks:
@@ -841,6 +912,50 @@ class Llm(nn.Module):
 
     # No forward method since this is only used as part of a `Molmo` model
 
+class LoRAProjectWithExtra(nn.Module):
+    def __init__(self, 
+                 og_linear: ProjectWithExtra,
+                 config: LlmConfig, 
+                 layer_id: int,
+                 rank: int = 16,
+                 alpha: float = 32.0,
+                 dropout: float = 0.05,
+                 ):
+        super().__init__()
+        self.og_linear = og_linear
+        self.rank = rank
+        self.alpha = alpha
+        self.scale = alpha / rank
+        self.config = config
+        self.layer_id = layer_id
+
+        input_dim = self.og_linear.weight.shape[1]
+        output_dim = self.og_linear.weight.shape[0]
+
+        self.A = nn.Parameter(torch.empty(rank, input_dim))
+        self.B = nn.Parameter(torch.zeros(output_dim, rank))
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+        for parameter in self.og_linear.parameters():
+            parameter.requires_grad = False
+    
+    def forward(self, x: torch.Tensor, logits=False, logits_with_new_embedding=False) -> torch.Tensor:
+        weight = self.og_linear.weight + (self.B @ self.A) * self.scale
+        return F.linear(self.dropout(x), torch.cat([weight, self.og_linear.new_weight], dim=0))
+
+    def merge_weights(self) -> ProjectWithExtra:
+        """
+        Merge LoRA weights into the original self.weight and return it, to reconstruct model w/o LoRA adapters
+        """
+        with torch.no_grad():
+            delta_w = (self.B @ self.A) * self.scale
+            self.og_linear.weight.add_(delta_w)
+        
+        return self.og_linear
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
+        nn.init.zeros_(self.B)
 
 class ProjectWithExtra(nn.Module):
     def __init__(self, input_dim, output_dim, extra_dim, bias, device=None):
@@ -1433,7 +1548,10 @@ class RotaryEmbedding(nn.Module):
                 batch_size = q_.shape[0]
                 query_len, key_len = q_.shape[-2], k_.shape[-2]  # could be different if layer_past not None
                 if position_ids is not None:
-                    freqs_cis_len = (self.config.max_position_embeddings or self.config.max_sequence_length)
+                    freqs_cis_len = max(
+                        self.config.max_position_embeddings or self.config.max_sequence_length,
+                        key_len
+                    )
                 else:
                     freqs_cis_len = key_len
                 pos_sin, pos_cos = self.get_rotary_embedding(freqs_cis_len, q_.device)
@@ -1557,6 +1675,65 @@ def get_causal_attention_bias(cache: BufferCache, seq_len: int, device: torch.de
     return causal_bias
 
 
+class LoRALinear(nn.Module):
+    """
+    Wraps an existing nn.Linear with a low-rank adapter.
+
+    Forward: y = og_linear(x) + (x @ A.T @ B.T) * (alpha / rank)
+
+    A init with kaiming uniform
+    B init to zero
+    """
+
+    def __init__(self, 
+                 og_linear: nn.Linear,
+                 config: LlmConfig,
+                 layer_id: int,
+                 rank: int = 16,
+                 alpha: float = 32.0, 
+                 dropout: float = 0.05,
+                 ):
+        super().__init__()
+        self.og_linear = og_linear
+        self.rank = rank
+        self.alpha = alpha
+        self.scale = alpha / rank
+        self.config = config
+        self.layer_id = layer_id
+
+        input_dim = og_linear.in_features
+        output_dim = og_linear.out_features
+
+        self.A = nn.Parameter(torch.empty(rank, input_dim))
+        self.B = nn.Parameter(torch.zeros(output_dim, rank))
+
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+        for parameter in self.og_linear.parameters():
+            parameter.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_og = self.og_linear(x)
+
+        x_lora = self.dropout(x)
+        x_lora = (x_lora @ self.A.T) @ self.B.T
+
+        return x_og + x_lora * self.scale
+
+    def merge_weights(self) -> nn.Linear:
+        """
+        Merge LoRA weights into the original linear layer and return it, to reconstruct model w/o LoRA adapters
+        """
+        with torch.no_grad():
+            delta_w = (self.B @ self.A) * self.scale
+            self.og_linear.weight.add_(delta_w)
+        
+        return self.og_linear
+    
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
+        nn.init.zeros_(self.B)
+
 class OLMoBlock(nn.Module):
     """
     A base class for transformer block implementations.
@@ -1655,20 +1832,28 @@ class OLMoBlock(nn.Module):
             self.k_norm.reset_parameters()
         if self.q_norm is not None:
             self.q_norm.reset_parameters()
+
+        attn_out = self.attn_out.og_linear if isinstance(self.attn_out, LoRALinear) else self.attn_out
         init_weights(
             self.config,
-            self.attn_out,
+            attn_out,
             d=self.config.d_model,
             layer_id=self.layer_id,
             type_of_module=ModuleType.out_module,
         )
+        if isinstance(self.attn_out, LoRALinear):
+            self.attn_out.reset_parameters()
+
+        ff_out = self.ff_out.og_linear if isinstance(self.ff_out, LoRALinear) else self.ff_out
         init_weights(
             self.config,
-            self.ff_out,
-            d=self.ff_out.in_features,
+            ff_out,
+            d=ff_out.in_features,
             layer_id=self.layer_id,
             type_of_module=ModuleType.out_module,
         )
+        if isinstance(self.ff_out, LoRALinear):
+            self.ff_out.reset_parameters()
 
     def apply_activation_checkpointing(self, strategy: LlmActivationCheckpointMode):
         if strategy == LlmActivationCheckpointMode.fine_grained:
@@ -1984,10 +2169,16 @@ class OLMoBlock(nn.Module):
     def build(cls, layer_id: int, config: LlmConfig, cache: BufferCache, device=None) -> OLMoBlock:
         if config.block_type == BlockType.sequential:
             module = OLMoSequentialBlock(layer_id, config, cache, device)
+            if config.lora:
+                module = cls.apply_lora(module, config=config, layer_id=layer_id)
         elif config.block_type == BlockType.llama:
             module = OLMoLlamaBlock(layer_id, config, cache, device)
+            if config.lora:
+                raise NotImplementedError("LoRA not implemented with OLMoLlamaBlock")
         elif config.block_type == BlockType.moe:
             module = OLMoEBlock(layer_id, config, cache, device)
+            if config.lora:
+                raise NotImplementedError("LoRA not implemented with OLMoEBlock")
         else:
             raise NotImplementedError(f"Unknown block type: '{config.block_type}'")
         return module
@@ -2010,6 +2201,36 @@ class OLMoBlock(nn.Module):
                 scatter_idx=2,
                 gather_idx=1
             )
+
+    @classmethod
+    def apply_lora(
+        cls,
+        block: OLMoBlock,
+        config: LlmConfig,
+        layer_id: int,
+        target_modules: Optional[list[str]] = None,
+    ):
+        if target_modules is None:
+            target_modules = [
+                "att_proj",
+                "attn_out",
+                "ff_proj",
+                "ff_out" # relevant nn.Linear layers to wrap in OLMoSequential
+            ]
+        
+        for module in target_modules:
+            target = block.get_submodule(module)
+
+            # convert original (target) module to LoRA adapted version
+            lora_module = LoRALinear(target, config=config, layer_id=layer_id, 
+                                     rank=config.lora_rank, alpha=config.lora_alpha, 
+                                     dropout=config.lora_dropout)
+            
+            block.set_submodule(module, lora_module, strict=True) # strict: throws an error if module does not exist
+        
+        return block
+
+
 
 class OLMoEBlock(OLMoBlock):
     """
@@ -2200,12 +2421,19 @@ class OLMoSequentialBlock(OLMoBlock):
         self.attn_norm.reset_parameters()
         self.ff_norm.reset_parameters()
         # NOTE: the standard deviation for these weights does not depend on the layer.
+        att_proj = self.att_proj.og_linear if isinstance(self.att_proj, LoRALinear) else self.att_proj
         init_weights(
-            self.config, self.att_proj, d=self.config.d_model, layer_id=None, type_of_module=ModuleType.in_module
+            self.config, att_proj, d=self.config.d_model, layer_id=None, type_of_module=ModuleType.in_module
         )
+        if isinstance(self.att_proj, LoRALinear):
+            self.att_proj.reset_parameters()
+
+        ff_proj = self.ff_proj.og_linear if isinstance(self.ff_proj, LoRALinear) else self.ff_proj
         init_weights(
-            self.config, self.ff_proj, d=self.config.d_model, layer_id=None, type_of_module=ModuleType.in_module
+            self.config, ff_proj, d=self.config.d_model, layer_id=None, type_of_module=ModuleType.in_module
         )
+        if isinstance(self.ff_proj, LoRALinear):
+            self.ff_proj.reset_parameters()
 
     def forward(
         self,

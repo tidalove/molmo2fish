@@ -22,7 +22,13 @@ Notes on the source format, all verified against the hub:
 - ~27% of clips are named with an end frame one lower on the hub than in the
   local annotations (`RB_..._2700_2999` vs `RB_..._2700_3000`), so extraction
   matches on both spellings and always writes the local one.
+- Some annotated clips are not in the release at all. Their absence is recorded
+  in `CFC/cfc26_unavailable.json` (see `_load_unavailable`) so later runs neither
+  refetch the river tarball nor re-walk the videos that will never complete —
+  without it, every cfc_hf_* config redownloads tens of GB to extract nothing.
+  `CFC26_RECHECK_MISSING=1` ignores the record and re-checks against the hub.
 """
+import json
 import logging
 import multiprocessing
 import os
@@ -43,6 +49,7 @@ log = logging.getLogger(__name__)
 CFC26_REPO = "perona-lab/cfc26"
 RIVERS = ("kenai", "rightbank", "nushagak", "elwha")
 JPEG_QUALITY = 95
+UNAVAILABLE_FILENAME = "cfc26_unavailable.json"
 
 WINDOW_RE = re.compile(r"^(?P<clip>.+)_f(?P<a>\d+)-(?P<b>\d+)$")
 TAIL_RE = re.compile(r"^(?P<stem>.+_)(?P<start>\d+)_(?P<end>\d+)$")
@@ -113,6 +120,49 @@ def _convert_worker(item):
         return out_path, f"{type(e).__name__}: {e}"
 
 
+def unavailable_path(source_root):
+    """Where the record of frames the release does not carry lives.
+
+    Beside SourceFrames/ (so CFC/cfc26_unavailable.json for a real tree, and its
+    own copy for a sandboxed --source-root), same rule as the tarball dir.
+    """
+    return join(dirname(source_root.rstrip("/")), UNAVAILABLE_FILENAME)
+
+
+def _load_unavailable(path):
+    """Read the record -> ({clip: {"river": r, "indices": set}}, {video_id}).
+
+    Absent or corrupt reads as empty: the cost of forgetting is one extra
+    tarball pass, which is what the file exists to avoid, not a wrong result.
+    """
+    if not exists(path):
+        return {}, set()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        clips = {clip: {"river": entry["river"], "indices": set(entry["indices"])}
+                 for clip, entry in data.get("clips", {}).items()}
+        return clips, set(data.get("videos", []))
+    except Exception as e:
+        log.warning(f"[cfc26] ignoring unreadable {path}: {type(e).__name__}: {e}")
+        return {}, set()
+
+
+def _save_unavailable(path, clips, videos):
+    payload = dict(
+        repo=CFC26_REPO,
+        clips={clip: dict(river=entry["river"], indices=sorted(entry["indices"]))
+               for clip, entry in sorted(clips.items())},
+        videos=sorted(videos),
+    )
+    if dirname(path):
+        os.makedirs(dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=1)
+    os.replace(tmp, path)
+
+
 @dataclass
 class StageReport:
     already_done: int = 0                       # videos whose dirs were complete
@@ -124,11 +174,17 @@ class StageReport:
     links_copied: int = 0
     missing_clips: set = field(default_factory=set)  # clips absent from the tars
     wanted_by_river: dict = field(default_factory=dict)
+    skipped_unavailable: int = 0                # videos the release cannot complete
+    frames_unavailable: int = 0                 # source frames known absent from the release
+    newly_unavailable: dict = field(default_factory=dict)  # clip -> n frames, first seen here
+    permanently_incomplete: set = field(default_factory=set)  # incomplete, nothing left to fetch
 
     def log_summary(self, prefix=""):
         log.info(f"{prefix}videos: {self.staged} staged, {self.already_done} already complete, "
-                 f"{len(self.incomplete)} incomplete")
-        log.info(f"{prefix}frames: {self.frames_written} converted, {self.frames_reused} reused; "
+                 f"{len(self.incomplete)} incomplete, "
+                 f"{self.skipped_unavailable} skipped as unavailable")
+        log.info(f"{prefix}frames: {self.frames_written} converted, {self.frames_reused} reused, "
+                 f"{self.frames_unavailable} unavailable; "
                  f"links: {self.links_created} hardlinked, {self.links_copied} copied")
         if self.missing_clips:
             sample = sorted(self.missing_clips)[:5]
@@ -140,12 +196,17 @@ class StageReport:
                         f"e.g. {sample}")
 
 
-def _plan(videos, jpeg_dir_fn, source_root, report):
+def _plan(videos, jpeg_dir_fn, source_root, report,
+          unavailable_clips=None, unavailable_videos=()):
     """Work out which source frames are missing. Returns (todo, wanted).
 
     todo:   [(video_id, clip, offset, n_frames, river)] for videos needing work
     wanted: {river: {hub_or_local_clip_name: {index: out_path}}}
+
+    Frames and videos previously found to be absent from the release are left out
+    of both, so a river whose only gaps are permanent is never fetched again.
     """
+    unavailable_clips = unavailable_clips or {}
     todo = []
     wanted = defaultdict(lambda: defaultdict(dict))
     required = set()
@@ -154,9 +215,15 @@ def _plan(videos, jpeg_dir_fn, source_root, report):
         if exists(frames_dir) and len(os.listdir(frames_dir)) == n_frames:
             report.already_done += 1
             continue
+        if video_id in unavailable_videos:
+            # the release cannot complete it; skip the per-frame stat pass that
+            # every later config would otherwise repeat for no gain
+            report.skipped_unavailable += 1
+            continue
         clip, offset = split_window(video_id)
         river = river_of(clip)
         todo.append((video_id, clip, offset, n_frames, river))
+        absent = unavailable_clips.get(clip, {}).get("indices", ())
         for j in range(n_frames):
             index = offset + j
             if (clip, index) in required:
@@ -165,10 +232,14 @@ def _plan(videos, jpeg_dir_fn, source_root, report):
             out_path = source_frame_path(source_root, river, clip, index)
             if exists(out_path):
                 continue
+            if index in absent:
+                report.frames_unavailable += 1
+                continue
             wanted[river][clip][index] = out_path
     for river, clips in wanted.items():
         report.wanted_by_river[river] = sum(len(v) for v in clips.values())
-    report.frames_reused = len(required) - sum(report.wanted_by_river.values())
+    report.frames_reused = (len(required) - sum(report.wanted_by_river.values())
+                            - report.frames_unavailable)
     return todo, wanted
 
 
@@ -194,7 +265,12 @@ def _download_tar(river, tar_dir):
 
 
 def _extract_river(river, clips, tar_path, n_procs, report):
-    """Convert every wanted frame of one river out of its tarball."""
+    """Convert every wanted frame of one river out of its tarball.
+
+    Returns {clip: {index: out_path}} for what the tarball did not have. The scan
+    only breaks early once nothing is left to find, so a non-empty return always
+    means the whole member list was read and those frames are genuinely absent.
+    """
     lookup = _resolve_hub_names(clips)
     remaining = {clip: dict(idx) for clip, idx in clips.items()}
     n_wanted = sum(len(v) for v in remaining.values())
@@ -256,18 +332,29 @@ def _extract_river(river, clips, tar_path, n_procs, report):
     log.info(f"[cfc26] {river}: {n_wanted - sum(len(v) for v in still.values())}"
              f"/{n_wanted} wanted frames extracted"
              + (f", {len(still)} clips incomplete" if still else ""))
+    return still
 
 
-def _link_video(video_id, clip, offset, n_frames, river, frames_dir, source_root, report):
+def _link_video(video_id, clip, offset, n_frames, river, frames_dir, source_root,
+                report, absent_indices=()):
+    """Hardlink a video's frames out of SourceFrames/.
+
+    Returns True when the video is incomplete and every gap is a frame the
+    release does not carry — i.e. nothing is left to fetch and it should be
+    recorded rather than retried. A gap from a failed convert returns False so
+    the next run picks it up again.
+    """
     os.makedirs(frames_dir, exist_ok=True)
-    missing = 0
+    missing = n_absent = 0
     for j in range(n_frames):
-        src = source_frame_path(source_root, river, clip, offset + j)
+        index = offset + j
+        src = source_frame_path(source_root, river, clip, index)
         dst = join(frames_dir, f"{video_id}_{j}.jpg")
         if exists(dst):
             continue
         if not exists(src):
             missing += 1
+            n_absent += index in absent_indices
             continue
         try:
             os.link(src, dst)
@@ -276,14 +363,15 @@ def _link_video(video_id, clip, offset, n_frames, river, frames_dir, source_root
             # different filesystem or link-count limit; fall back to a real copy
             shutil.copy2(src, dst)
             report.links_copied += 1
-    if missing:
-        report.incomplete[video_id] = missing
-    else:
+    if not missing:
         report.staged += 1
+        return False
+    report.incomplete[video_id] = missing
+    return missing == n_absent
 
 
 def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
-                  keep_tars=False, tar_dir=None, dry_run=False):
+                  keep_tars=None, tar_dir=None, dry_run=False, recheck_missing=None):
     """Make sure every video's frame directory exists and is complete.
 
     Args:
@@ -295,14 +383,38 @@ def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
             (CFC/SourceFrames).
         n_procs: workers for JPEG decode/re-encode.
         rivers: restrict work to these rivers (default: whatever is needed).
-        keep_tars: keep the downloaded tarballs instead of deleting them.
+        keep_tars: keep the downloaded tarballs instead of deleting them
+            (default: CFC26_KEEP_TARS=1).
         tar_dir: where to download tarballs (default: alongside source_root).
         dry_run: report what would be fetched, change nothing.
+        recheck_missing: re-check frames previously found absent from the release
+            instead of trusting the record (default: CFC26_RECHECK_MISSING=1).
     """
+    if keep_tars is None:
+        keep_tars = os.environ.get("CFC26_KEEP_TARS", "0") == "1"
+    if recheck_missing is None:
+        recheck_missing = os.environ.get("CFC26_RECHECK_MISSING", "0") == "1"
+
+    ledger_path = unavailable_path(source_root)
+    ledger_clips, ledger_videos = _load_unavailable(ledger_path)
+    if recheck_missing and (ledger_clips or ledger_videos):
+        log.info(f"[cfc26] re-checking {len(ledger_clips)} clips / {len(ledger_videos)} videos "
+                 f"recorded as unavailable in {ledger_path}")
+        plan_clips, plan_videos = {}, set()
+    else:
+        plan_clips, plan_videos = ledger_clips, ledger_videos
+
     report = StageReport()
-    todo, wanted = _plan(videos, jpeg_dir_fn, source_root, report)
+    todo, wanted = _plan(videos, jpeg_dir_fn, source_root, report,
+                         plan_clips, plan_videos)
+    if report.skipped_unavailable or report.frames_unavailable:
+        log.info(
+            f"[cfc26] skipping {report.skipped_unavailable} videos and "
+            f"{report.frames_unavailable} source frames that {CFC26_REPO} does not carry "
+            f"(recorded in {ledger_path}); CFC26_RECHECK_MISSING=1 to re-check")
     if not todo:
-        log.info(f"[cfc26] all {report.already_done} video frame dirs already complete")
+        log.info(f"[cfc26] nothing to stage: {report.already_done} video frame dirs complete, "
+                 f"{report.skipped_unavailable} unavailable")
         report.log_summary(prefix="[cfc26] ")
         return report
 
@@ -310,6 +422,11 @@ def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
         rivers = set(rivers)
         wanted = {r: c for r, c in wanted.items() if r in rivers}
         todo = [t for t in todo if t[-1] in rivers]
+    if recheck_missing:
+        # drop what we are about to re-derive, keep the rivers this run never touches
+        touched = set(wanted)
+        ledger_clips = {c: e for c, e in ledger_clips.items() if e["river"] not in touched}
+        ledger_videos -= set(videos)
 
     n_frames_wanted = sum(report.wanted_by_river.get(r, 0) for r in wanted)
     log.info(f"[cfc26] {len(todo)} videos need frames; {n_frames_wanted} source frames "
@@ -326,7 +443,7 @@ def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
             continue
         tar_path = _download_tar(river, tar_dir)
         try:
-            _extract_river(river, clips, tar_path, n_procs, report)
+            still = _extract_river(river, clips, tar_path, n_procs, report)
         except Exception:
             # keep the tarball so a retry (e.g. the next config in a group
             # download) resumes instead of refetching tens of GB
@@ -334,11 +451,23 @@ def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
             raise
         if not keep_tars and exists(tar_path):
             os.remove(tar_path)
+        for clip, indices in still.items():
+            entry = ledger_clips.setdefault(clip, dict(river=river, indices=set()))
+            entry["indices"].update(indices)
+            report.newly_unavailable[clip] = len(indices)
 
     for video_id, clip, offset, n_frames, river in tqdm(
             todo, desc="[cfc26] linking", unit=" videos"):
-        _link_video(video_id, clip, offset, n_frames, river,
-                    jpeg_dir_fn(video_id), source_root, report)
+        if _link_video(video_id, clip, offset, n_frames, river,
+                       jpeg_dir_fn(video_id), source_root, report,
+                       ledger_clips.get(clip, {}).get("indices", ())):
+            report.permanently_incomplete.add(video_id)
+
+    ledger_videos |= report.permanently_incomplete
+    if report.newly_unavailable or report.permanently_incomplete or recheck_missing:
+        _save_unavailable(ledger_path, ledger_clips, ledger_videos)
+        log.info(f"[cfc26] {len(ledger_clips)} clips / {len(ledger_videos)} videos recorded as "
+                 f"unavailable in {ledger_path}; they will not be fetched again")
 
     report.log_summary(prefix="[cfc26] ")
     return report

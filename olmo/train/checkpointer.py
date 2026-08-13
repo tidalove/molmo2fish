@@ -56,6 +56,53 @@ def load_model_state_unsharded(dir: PathOrStr, model: nn.Module):
     )
 
 
+def merge_lora_state_dict(state_dict: dict, scale: float) -> dict:
+    """Merge LoRA A/B weights into base weights, returning a clean state dict
+    loadable by a non-LoRA model.
+
+    For each LoRA-wrapped module, computes:
+        merged_weight = og_linear.weight + (B @ A) * scale
+
+    and replaces the LoRA key hierarchy (og_linear.weight, A, B) with a
+    standard key (weight).
+    """
+    # Find all LoRA module paths by looking for .og_linear. in keys
+    lora_paths = set()
+    for key in state_dict:
+        if ".og_linear." in key:
+            lora_paths.add(key.rsplit(".og_linear.", 1)[0])
+
+    # Keys that belong to LoRA modules (to skip in the main loop)
+    lora_keys = set()
+    for lp in lora_paths:
+        for key in state_dict:
+            if key.startswith(lp + "."):
+                lora_keys.add(key)
+
+    merged = {}
+    for key, value in state_dict.items():
+        if key in lora_keys:
+            continue
+        merged[key] = value
+
+    # Merge each LoRA module
+    for lp in lora_paths:
+        A = state_dict[f"{lp}.A"]
+        B = state_dict[f"{lp}.B"]
+        weight = state_dict[f"{lp}.og_linear.weight"]
+        merged[f"{lp}.weight"] = weight + (B @ A) * scale
+
+        bias_key = f"{lp}.og_linear.bias"
+        if bias_key in state_dict:
+            merged[f"{lp}.bias"] = state_dict[bias_key]
+
+        new_weight_key = f"{lp}.og_linear.new_weight"
+        if new_weight_key in state_dict:
+            merged[f"{lp}.new_weight"] = state_dict[new_weight_key]
+
+    return merged
+
+
 def save_unsharded(dir: PathOrStr, model: nn.Module, optim: Optimizer,
                    config: BaseConfig, overwrite: bool = False):
     """
@@ -64,6 +111,16 @@ def save_unsharded(dir: PathOrStr, model: nn.Module, optim: Optimizer,
     """
     sd_options = dist_cp_sd.StateDictOptions(full_state_dict=True, cpu_offload=True)
     state_dict = dist_cp_sd.get_model_state_dict(model, options=sd_options)
+
+    # Merge LoRA weights into base weights if configured
+    if getattr(config, 'llm', None) and getattr(config.llm, 'lora', False) \
+       and getattr(config.llm, 'lora_merge_on_save', False):
+        import copy
+        scale = config.llm.lora_alpha / config.llm.lora_rank
+        state_dict = merge_lora_state_dict(state_dict, scale)
+        config = copy.deepcopy(config)
+        config.llm.lora = False
+
     if get_fs_local_rank() == 0:
         write_file(dir, MODEL_FILENAME, lambda f: torch.save(state_dict, f), overwrite)
         del state_dict

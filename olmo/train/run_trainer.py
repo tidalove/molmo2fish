@@ -224,6 +224,12 @@ def run_trainer(cfg: TrainConfig) -> None:
     if olmo_model.config.llm.block_type == "moe":
         log.info(f"Number of active parameters: {olmo_model.num_params(include_inactive_params=False):,d}")
     log.info(f"Peak GPU Memory (MB) after FSDP: {int(peak_gpu_memory() or 0)}")
+    
+    frozen = sum(p.numel() for p in olmo_model.parameters() if not p.requires_grad)
+    trainable = sum(p.numel() for p in olmo_model.parameters() if p.requires_grad)
+    log.info(f"Number of trainable parameters: {trainable:,d}")
+    log.info(f"Number of frozen parameters: {frozen:,d}")
+    
     log.info("Model:")
     log.info(fsdp_model)
 

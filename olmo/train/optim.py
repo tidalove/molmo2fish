@@ -61,33 +61,37 @@ class OptimizerConfig(BaseConfig):
     connector_learning_rate: Optional[float] = 1.0e-4
     vit_learning_rate: Optional[float] = 1.0e-4
     llm_learning_rate: Optional[float] = 1.0e-4
+    lora_learning_rate: Optional[float] = 1.0e-3
     frame_selector_learning_rate: Optional[float] = 1.0e-4
     """
-    Separate learning_rate values for the connector, vision backbone, and llm transformer.
+    Separate learning_rate values for the connector, vision backbone, llm transformer, and lora adapters.
     """
 
     connector_weight_decay: Optional[float] = 0.0
     vit_weight_decay: Optional[float] = 0.0
     llm_weight_decay: Optional[float] = 0.0
+    lora_weight_decay: Optional[float] = 0.0
     frame_selector_weight_decay: Optional[float] = 0.0
     """
-    Separate weight decay values for the connector, vision backbone, and llm transformer.
+    Separate weight decay values for the connector, vision backbone, llm transformer, and lora adapters.
     """
 
     connector_betas: Tuple[float, float] = (0.9, 0.95)
     vit_betas: Tuple[float, float] = (0.9, 0.95)
     llm_betas: Tuple[float, float] = (0.9, 0.95)
+    lora_betas: Tuple[float, float] = (0.9, 0.95)
     frame_selector_betas: Tuple[float, float] = (0.9, 0.95)
     """
-    Separate betas values for the connector, vision backbone, and llm transformer.
+    Separate betas values for the connector, vision backbone, llm transformer, and lora adapters.
     """
 
     connector_eps: Optional[float] = 1.0e-6
     vit_eps: Optional[float] = 1.0e-6
     llm_eps: Optional[float] = 1.0e-6
+    lora_eps: Optional[float] = 1.0e-6
     frame_selector_eps: Optional[float] = 1.0e-6
     """
-    Separate weight decay values for the connector, vision backbone, and llm transformer.
+    Separate weight decay values for the connector, vision backbone, llm transformer, and lora adapters.
     """
 
     metrics_log_interval: Optional[int] = -1
@@ -102,12 +106,21 @@ class OptimizerConfig(BaseConfig):
         self.connector_betas = tuple(self.connector_betas)  # type: ignore[assignment]
         self.vit_betas = tuple(self.vit_betas)  # type: ignore[assignment]
         self.llm_betas = tuple(self.llm_betas)  # type: ignore[assignment]
+        self.lora_betas = tuple(self.lora_betas)
 
     def get_param_groups(self, max_grad_norm, max_grad_norm_ratio, model: nn.Module) -> List[Dict[str, Any]]:
         """
-        Separate parameters into connector/vit/llm weight decay and non weight decay groups.
+        Separate parameters into connector/vit/llm/lora weight decay and non weight decay groups.
         """
         group_configs = [
+            {
+                "group_name": "lora",
+                "params": [p for p in model.get_lora_parameters() if p.requires_grad],
+                "lr": self.lora_learning_rate,
+                "weight_decay": self.lora_weight_decay,
+                "betas": self.lora_betas,
+                "eps": self.lora_eps,
+            },
             {
                 "group_name": "llm",
                 "params": [p for p in model.get_llm_parameters() if p.requires_grad],
@@ -437,6 +450,7 @@ class MultimodalScheduler(Scheduler):
     connector_scheduler: Scheduler
     vit_scheduler: Scheduler
     llm_scheduler: Scheduler
+    lora_scheduler: Scheduler
     frame_selector_scheduler: Scheduler
     temporal_token_scorer_scheduler: Scheduler
 
@@ -451,6 +465,8 @@ class MultimodalScheduler(Scheduler):
             return self.frame_selector_scheduler.get_lr(initial_lr, step, max_steps)
         elif group_name.startswith("temporal_token_scorer"):
             return self.temporal_token_scorer_scheduler.get_lr(initial_lr, step, max_steps)
+        elif group_name.startswith("lora"):
+            return self.lora_scheduler.get_lr(initial_lr, step, max_steps)
         else:
             raise ValueError(f"Unknown group name: {group_name}")
 
@@ -466,6 +482,7 @@ class SchedulerConfig(BaseConfig):
     connector_t_warmup: Union[int, float] = 200
     vit_t_warmup: Union[int, float] = 200
     llm_t_warmup: Union[int, float] = 200
+    lora_t_warmup: Union[int, float] = 200
     frame_selector_t_warmup: Union[int, float] = 200
     temporal_token_scorer_t_warmup: Union[int, float] = 200
     """
@@ -521,6 +538,16 @@ class SchedulerConfig(BaseConfig):
             t_max=None if self.t_max is None else int(self.t_max),
             warmup_min_lr=self.warmup_min_lr,
         )
+        lora_sched = CosWithWarmup(
+            grad_clip_warmup_steps=None
+            if self.grad_clip_warmup_steps is None
+            else int(self.grad_clip_warmup_steps),
+            grad_clip_warmup_factor=self.grad_clip_warmup_factor,
+            warmup_steps=int(self.lora_t_warmup),
+            alpha_f=self.alpha_f,
+            t_max=None if self.t_max is None else int(self.t_max),
+            warmup_min_lr=self.warmup_min_lr,
+        )
         frame_selector_scheduler = CosWithWarmup(
             grad_clip_warmup_steps=None if self.grad_clip_warmup_steps is None else int(self.grad_clip_warmup_steps),
             grad_clip_warmup_factor=self.grad_clip_warmup_factor,
@@ -545,6 +572,7 @@ class SchedulerConfig(BaseConfig):
             connector_scheduler=connector_sched,
             vit_scheduler=vit_sched,
             llm_scheduler=llm_sched,
+            lora_scheduler=lora_sched,
             frame_selector_scheduler=frame_selector_scheduler,
             temporal_token_scorer_scheduler=temporal_token_scorer_scheduler,
         )

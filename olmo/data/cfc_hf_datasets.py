@@ -13,8 +13,16 @@ download() caches the hub annotations, rehydrates MasksRLE/ files
 $MOLMO_DATA_DIR/video_datasets/video_track/CFC/{SourceFrames,JPEGImages}/ from
 the raw-frame release perona-lab/cfc26 (see olmo/data/cfc_frames.py; set
 CFC_STAGE_FRAMES=0 to skip when frames are already placed by hand) and encodes
-videos/{video_id}.mp4 with ffmpeg. Staging every config in one pass over the
-river tarballs is cheaper than one pass per class: scripts/download_cfc_frames.py.
+videos/{video_id}.mp4 with ffmpeg. All splits are staged in one pass over the
+river tarballs; staging every config at once is cheaper still, and doing so is
+what scripts/download_cfc_frames.py is for.
+
+The encoded videos define the usable rows: load() drops any row whose mp4 is not
+on disk (CFC_REQUIRE_VIDEO=0 opts out) and download() reports what will be
+dropped, so a subset download, an interrupted one, or an annotated clip the
+frame release does not carry all degrade to a smaller dataset instead of a
+missing-file crash. The cached annotations are never pruned, so staging more
+videos later restores their rows.
 """
 import json
 import logging
@@ -56,11 +64,48 @@ class CFCHFMixin:
     # ── Annotation loading ────────────────────────────────────────────────
 
     @classmethod
-    def _load_hf_rows(cls, data_split, overwrite_cache=False):
-        return _load_hf_dataset(
+    def _load_hf_rows(cls, data_split, overwrite_cache=False, require_video=False):
+        rows = _load_hf_dataset(
             cls.HF_SOURCE, data_split,
             local_name=join("CFC", "hf_annotations", cls.HF_CONFIG, data_split),
             config=cls.HF_CONFIG, overwrite_cache=overwrite_cache)
+        if require_video and cls.NEEDS_VIDEO and os.environ.get("CFC_REQUIRE_VIDEO", "1") != "0":
+            rows = cls._drop_unencoded(rows, data_split)
+        return rows
+
+    @classmethod
+    def _encoded_videos(cls, data_split):
+        """Video ids that actually have an mp4 on disk (one listdir, not a stat per row)."""
+        video_dir = cls._get_video_dir(data_split)
+        if not exists(video_dir):
+            return set()
+        return {f[:-len(".mp4")] for f in os.listdir(video_dir) if f.endswith(".mp4")}
+
+    @classmethod
+    def _unencoded_videos(cls, rows, data_split):
+        present = cls._encoded_videos(data_split)
+        return sorted({v for v in rows["video"] if v not in present})
+
+    @classmethod
+    def _drop_unencoded(cls, rows, data_split):
+        """Drop rows whose video was never encoded.
+
+        Reasons this happens: a deliberate subset download, an interrupted one, or
+        annotations for a clip the CFC26 frame release does not carry. The rows are
+        unusable either way, and dropping them here keeps the dataloader from opening
+        a file that is not there. The cached annotations stay complete, so staging the
+        videos later brings the rows back with no refetch.
+        """
+        missing = cls._unencoded_videos(rows, data_split)
+        if not missing:
+            return rows
+        missing_set = set(missing)
+        keep = [i for i, v in enumerate(rows["video"]) if v not in missing_set]
+        log.warning(
+            f"[{cls.DATASET_NAME}] {data_split}: dropping {len(rows) - len(keep)} of "
+            f"{len(rows)} rows with no encoded video ({len(missing)} videos), e.g. "
+            f"{missing[:3]} — run download() to stage them, or ignore if intentional")
+        return rows.select(keep)
 
     def _get_candidate_fps(self, video_fps):
         # Annotations only exist at ANNOTATION_FPS-divisible rates; the inherited
@@ -79,34 +124,52 @@ class CFCHFMixin:
 
     @classmethod
     def download(cls, n_procs=1):
-        for data_split in sorted(set(cls.SPLIT_MAP.values())):
-            rows = cls._load_hf_rows(data_split)
+        rows_by_split = {data_split: cls._load_hf_rows(data_split)
+                         for data_split in sorted(set(cls.SPLIT_MAP.values()))}
+        for data_split, rows in rows_by_split.items():
             cls._rehydrate_masks(rows, data_split)
-            if cls.NEEDS_VIDEO:
-                cls._stage_frames(rows, data_split, n_procs)
+        if cls.NEEDS_VIDEO:
+            # one staging pass for every split: frames are flat on disk, and a per-split
+            # pass would refetch each multi-GB river tarball once per split
+            cls._stage_frames(rows_by_split, n_procs)
+            for data_split, rows in rows_by_split.items():
                 cls._encode_videos(rows, data_split, n_procs)
+        cls._report_reconciliation(rows_by_split)
 
     @classmethod
-    def _stage_frames(cls, rows, data_split, n_procs=1):
+    def _stage_frames(cls, rows_by_split, n_procs=1):
         """Fetch missing frames from perona-lab/cfc26 into JPEGImages/."""
         if os.environ.get("CFC_STAGE_FRAMES", "1") == "0":
             log.info(f"[{cls.DATASET_NAME}] CFC_STAGE_FRAMES=0, skipping frame staging")
             return
-        video_dir = cls._get_video_dir(data_split)
         # a video that is already encoded needs no frames
-        videos = {video_id: n_frames
-                  for video_id, n_frames in zip(rows["video"], rows["n_frames"])
-                  if not exists(join(video_dir, f"{video_id}.mp4"))}
+        videos = {}
+        for data_split, rows in rows_by_split.items():
+            encoded = cls._encoded_videos(data_split)
+            videos.update({video_id: n_frames
+                           for video_id, n_frames in zip(rows["video"], rows["n_frames"])
+                           if video_id not in encoded})
         if not videos:
             return
-        log.info(f"[{cls.DATASET_NAME}] {len(videos)} videos need frames ({data_split}); "
+        splits = "+".join(sorted(rows_by_split))
+        log.info(f"[{cls.DATASET_NAME}] {len(videos)} videos need frames ({splits}); "
                  f"staging all configs at once is cheaper: scripts/download_cfc_frames.py")
-        home = cls._get_home(data_split)
-        ensure_frames(
+        # JPEGImages/ and SourceFrames/ are shared by every split, so any split's
+        # paths are the right ones (see CFCDatasetBase._get_frames_dir)
+        any_split = next(iter(rows_by_split))
+        report = ensure_frames(
             videos,
-            jpeg_dir_fn=lambda vid: cls._get_frames_dir(data_split, vid),
-            source_root=join(home, "SourceFrames"),
+            jpeg_dir_fn=lambda vid: cls._get_frames_dir(any_split, vid),
+            source_root=join(cls._get_home(any_split), "SourceFrames"),
             n_procs=n_procs)
+        if report.incomplete or report.missing_clips or report.skipped_unavailable:
+            log.warning(
+                f"[{cls.DATASET_NAME}] frame staging left {len(report.incomplete)} videos "
+                f"incomplete and skipped {report.skipped_unavailable} known-unavailable ones "
+                f"({len(report.missing_clips)} source clips missing from the CFC26 release); "
+                f"their rows will be dropped at load time. Clips the release does not carry "
+                f"are recorded, so the next config will not refetch their river tarball")
+        return report
 
     @classmethod
     def _mask_path(cls, row):
@@ -150,7 +213,8 @@ class CFCHFMixin:
         video_dir = cls._get_video_dir(data_split)
         work = []
         seen = set()
-        for video_id, fps in zip(rows["video"], rows["fps"]):
+        n_unstaged = 0
+        for video_id, fps, n_frames in zip(rows["video"], rows["fps"], rows["n_frames"]):
             if video_id in seen:
                 continue
             seen.add(video_id)
@@ -161,11 +225,21 @@ class CFCHFMixin:
             if not exists(frames_dir):
                 log.warning(f"[{cls.DATASET_NAME}] no frames for {video_id} "
                             f"({frames_dir}); skipping encode")
+                n_unstaged += 1
+                continue
+            # a partial dir would encode into a short mp4 that still looks present but
+            # no longer lines up with the annotations — leave it unencoded instead
+            n_staged = len(os.listdir(frames_dir))
+            if n_staged != n_frames:
+                log.warning(f"[{cls.DATASET_NAME}] {video_id}: {n_staged} frames staged "
+                            f"but {n_frames} annotated; skipping encode")
+                n_unstaged += 1
                 continue
             work.append(dict(frames_dir=frames_dir, output_path=out_path, fps=fps))
         if not work:
-            log.info(f"[{cls.DATASET_NAME}] videos ({data_split}): all "
-                     f"{len(seen)} present")
+            log.info(f"[{cls.DATASET_NAME}] videos ({data_split}): "
+                     f"{len(seen) - n_unstaged}/{len(seen)} present"
+                     + (f", {n_unstaged} lack complete frames" if n_unstaged else ""))
             return
         log.info(f"[{cls.DATASET_NAME}] encoding {len(work)} videos ({data_split})")
         if n_procs > 1:
@@ -180,6 +254,32 @@ class CFCHFMixin:
             log.warning(f"[{cls.DATASET_NAME}] {len(failed)} encodes failed, "
                         f"e.g. {failed[:3]}")
 
+    @classmethod
+    def _report_reconciliation(cls, rows_by_split):
+        """End-of-download summary: what load() will actually see, and what it won't.
+
+        Reports only — the cached annotations are left whole so a later download can
+        fill the gaps. See _drop_unencoded.
+        """
+        for data_split, rows in rows_by_split.items():
+            n_videos = len(set(rows["video"]))
+            if not cls.NEEDS_VIDEO:
+                log.info(f"[{cls.DATASET_NAME}] {data_split}: {len(rows)} rows "
+                         f"(no video needed)")
+                continue
+            missing = cls._unencoded_videos(rows, data_split)
+            if not missing:
+                log.info(f"[{cls.DATASET_NAME}] {data_split}: {len(rows)} rows, "
+                         f"{n_videos} videos, all encoded")
+                continue
+            missing_set = set(missing)
+            n_dropped = sum(1 for v in rows["video"] if v in missing_set)
+            log.warning(
+                f"[{cls.DATASET_NAME}] {data_split}: {len(rows)} rows, {n_videos} videos, "
+                f"{n_videos - len(missing)} encoded — load() will drop {n_dropped} rows "
+                f"for {len(missing)} unencoded videos: {missing[:10]}"
+                + (f" (+{len(missing) - 10} more)" if len(missing) > 10 else ""))
+
 
 # ── Track family ───────────────────────────────────────────────────────────
 
@@ -192,7 +292,7 @@ class CFCTrackHF(CFCHFMixin, CFCDatasetBase):
         return join(cls.VIDEO_HOME, "MasksRLE", row["video"], f"{row['qid']}.json")
 
     def load(self):
-        rows = self._load_hf_rows(self.data_split)
+        rows = self._load_hf_rows(self.data_split, require_video=True)
         if "masks" in rows.column_names:
             rows = rows.remove_columns("masks")  # eval reads rehydrated MasksRLE files
         data = []
@@ -229,7 +329,7 @@ class CFCTargetedHF(CFCTrackHF):
 
 class CFCCorrectionHFBase(CFCHFMixin, CFCMultiTurnBase):
     def load(self):
-        rows = self._load_hf_rows(self.data_split)
+        rows = self._load_hf_rows(self.data_split, require_video=True)
         if "masks" in rows.column_names:
             rows = rows.remove_columns("masks")
         data = []

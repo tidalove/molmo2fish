@@ -237,6 +237,18 @@ def load_model_and_optim_state(
     )
     metadata = reader.read_metadata()
 
+    # Auto-detect LoRA key remapping: model has og_linear.weight, checkpoint has weight
+    lora_key_mapping = {}
+    for model_key in list(state_dict['model'].keys()):
+        if '.og_linear.' in model_key:
+            original_key = model_key.replace('.og_linear.', '.')
+            if f"model.{original_key}" in metadata.state_dict_metadata:
+                lora_key_mapping[model_key] = original_key
+    if lora_key_mapping:
+        if key_mapping is None:
+            key_mapping = {}
+        key_mapping.update(lora_key_mapping)
+
     model_key_list = list(state_dict['model'].keys())
     frame_selection_needs_init = False
     for model_key in model_key_list:
@@ -252,8 +264,11 @@ def load_model_and_optim_state(
             model.frame_selection_score_scaler.reset_parameters()
         state_dict = _prepare_state_dict(model, optim, process_group=process_group)
 
-    if key_mapping is None:
-        key_mapping = model.get_legacy_key_mapping()
+    legacy_mapping = model.get_legacy_key_mapping()
+    if legacy_mapping is not None:
+        if key_mapping is None:
+            key_mapping = {}
+        key_mapping.update(legacy_mapping)
     if key_mapping is not None:
         for current_key, original_key in key_mapping.items():
             if f"model.{original_key}" not in metadata.state_dict_metadata:
@@ -288,6 +303,13 @@ def load_model_and_optim_state(
     )
 
     if len(skipped_modules) > 0:
+        # Re-add LoRA adapter params (A, B) with their initialized values
+        lora_skipped = [k for k in skipped_modules if k.endswith(".A") or k.endswith(".B")]
+        if lora_skipped:
+            log.info(f"LoRA params not in checkpoint, using initialized values ({len(lora_skipped)} tensors)")
+            for k in lora_skipped:
+                state_dict['model'][k] = skipped_modules.pop(k)
+
         for key in ["vision_backbone.pad_embed"]:
             if key in skipped_modules:
                 log.info(f"{key} was not in checkpoint, using initialized value")
@@ -376,6 +398,13 @@ def load_model_and_optim_state(
         model, state_dict["model"], options=dist_cp_sd.StateDictOptions(strict=True)
     )
     gc_cuda()
+
+    # Initialize LoRA adapter params (A/B) that weren't in the checkpoint
+    if lora_key_mapping:
+        from olmo.nn.llm import LoRALinear, LoRAProjectWithExtra
+        for module in model.modules():
+            if isinstance(module, (LoRALinear, LoRAProjectWithExtra)):
+                module.reset_parameters()
 
     if optim is not None:
         dist_cp_sd.set_optimizer_state_dict(
