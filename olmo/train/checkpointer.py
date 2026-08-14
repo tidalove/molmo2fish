@@ -112,14 +112,30 @@ def save_unsharded(dir: PathOrStr, model: nn.Module, optim: Optimizer,
     sd_options = dist_cp_sd.StateDictOptions(full_state_dict=True, cpu_offload=True)
     state_dict = dist_cp_sd.get_model_state_dict(model, options=sd_options)
 
-    # Merge LoRA weights into base weights if configured
-    if getattr(config, 'llm', None) and getattr(config.llm, 'lora', False) \
-       and getattr(config.llm, 'lora_merge_on_save', False):
+    # Merge LoRA weights into base weights if configured. The caller passes either a
+    # model config (which has .llm directly) or the TrainConfig (which nests it under
+    # .model) -- Trainer does the latter, so checking only for .llm silently skipped the
+    # merge on every run and wrote an unsharded checkpoint that still had og_linear/A/B
+    # keys while its config claimed the weights were merged.
+    model_config = config if getattr(config, 'llm', None) else getattr(config, 'model', None)
+    llm_config = getattr(model_config, 'llm', None)
+    if llm_config is not None and getattr(llm_config, 'lora', False) \
+       and getattr(llm_config, 'lora_merge_on_save', False):
         import copy
-        scale = config.llm.lora_alpha / config.llm.lora_rank
+        scale = llm_config.lora_alpha / llm_config.lora_rank
         state_dict = merge_lora_state_dict(state_dict, scale)
         config = copy.deepcopy(config)
-        config.llm.lora = False
+        merged_llm = config.llm if getattr(config, 'llm', None) else config.model.llm
+        merged_llm.lora = False
+        # merge_lora_state_dict works off the `.og_linear.` key prefix, so it also merges
+        # the ViT and connector adapters -- their flags have to be cleared too or the
+        # config would rebuild wrappers the weights no longer have.
+        vision_config = getattr(model_config, 'vision_backbone', None)
+        if vision_config is not None:
+            merged_vision = (config.vision_backbone if getattr(config, 'llm', None)
+                             else config.model.vision_backbone)
+            merged_vision.lora_vit = False
+            merged_vision.lora_connector = False
 
     if get_fs_local_rank() == 0:
         write_file(dir, MODEL_FILENAME, lambda f: torch.save(state_dict, f), overwrite)

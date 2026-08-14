@@ -2,14 +2,11 @@
   <img src="assets/Molmo2-logo.svg" alt="Molmo2 Logo" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
   <br>
   <br>
-  <h1>Molmo 2: State-of-the-art video understanding, pointing, and tracking</h1>
+  <h1>Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance</h1>
 </div>
 <p align="center">
   <a href="https://github.com/allenai/molmo2/LICENSE">
     <img alt="GitHub License" src="https://img.shields.io/github/license/allenai/OLMo">
-  </a>
-  <a href="https://allenai.org/blog/molmo2">
-    <img alt="Blog Post" src="https://img.shields.io/badge/Molmo2-blog-F0529C">
   </a>
   <a href="https://arxiv.org/abs/2601.10611">
     <img alt="Paper URL" src="https://img.shields.io/badge/arxiv-2601.10611-blue">
@@ -18,10 +15,9 @@
     <img alt="Model Checkpoints" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Models-yellow">
   </a>
   <a href="https://huggingface.co/collections/allenai/molmo2-data">
-    <img alt="Molmo2 Datasets" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Datasets-yellow">
+    <img alt="Molmo2Fish Datasets" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Datasets-yellow">
   </a>
 </p>
-
 
 This repository is an extension of Ai2's open vision language model, Molmo2, for fish tracking and track correction. It preserves all the functionality of Ai2's original Molmo2 release. Our new contributions, described in [our paper]() and implemented in this repo, are:
 
@@ -31,36 +27,29 @@ This repository is an extension of Ai2's open vision language model, Molmo2, for
 
 Molmo2 is state-of-the-art among open-source models and demonstrates exceptional new capabilities in point-driven grounding in single image, multi-image, and video tasks as shown below. This README is written to be self-contained but does not include the information on different training stages and validation on the original, full Molmo2 video data corpus that is detailed in [Ai2's repository](). Instead, we focus on a full walkthrough of the new contributions listed above.
 
-
-
 ## Table of Contents
+- [Overview](#overview)
 - [Setup](#setup)
   - [Installation](#installation)
   - [Downloading Data](#downloading-data)
-  - [Downloading Pretrained Models](#downloading-pretrained-models)
-  - [Visualizing Data](#visualizing-data)
   - [Environment](#environment)
 - [Training and Evaluations](#training-and-evaluations)
   - [Checkpoints](#checkpoints)
-  - [SFT Training](#sft-training)
+  - [Fine-tuning](#fine-training)
   - [Evaluation](#evaluation)
-  - [Context Parallel](#context-parallel)
-- [Transformers and vLLM](#transformers-and-vllm)
-  - [Convert Checkpoint to Hugging Face Format](#convert-checkpoint-to-hugging-face-format)
-  - [Transformers Inference](#transformers-inference)
-    - [Image Inference Example](#image-inference-example)
-    - [Video Inference Example](#video-inference-example)
-  - [MolmoPoint Transformers Inference](#molmopoint-transformers-inference)
-      - [Image Inference Example](#image-inference-example)
-      - [Video Inference Example](#video-inference-example)
-  - [Fast Inference with vLLM](#fast-inference-with-vllm)
     - [Install Vision Process Package](#install-vision-process-package)
     - [Install vLLM (\>= 0.15.0)](#install-vllm--0150)
-    - [Run vLLM inference (Gradio Demo)](#run-vllm-inference-gradio-demo)
-- [Code](#code)
-  - [Data Pipeline](#data-pipeline)
-  - [Message Trees](#message-trees)
-  - [Packing](#packing)
+    - [Convert Checkpoint to Hugging Face Format](#convert-checkpoint-to-hugging-face-format)
+
+# Overview
+
+TODO: overview of main paper results and conclusions
+
+<img src="assets/hota_before_after_anim.gif" alt="HOTA before/after correction" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
+
+TODO: correction example, maybe also as a gif?
+
+TODO: concise results table
 
 # Setup
 ## Installation
@@ -118,16 +107,6 @@ and `WANDB_API_KEY` is for wandb logging.
 
 # Training and Evaluations
 
-
-
-Molmo2 training has three stages:
-
-1. **Pre-Training** — Train on image captioning, NLP, and image pointing using `launch_scripts/pretrain.py`. Start from pretrained LLM + ViT weights.
-2. **SFT** — Multitask supervised fine-tuning on the full mixture (QA, pointing, tracking, video, etc.) using `launch_scripts/sft.py`. Start from a pretrained checkpoint.
-3. **Long-Context SFT** — Continue SFT with longer sequences (36k+ tokens, 384 frames) for improved video understanding. Uses the same `launch_scripts/sft.py` with increased `--seq_len`.
-
-Each stage produces a checkpoint that feeds into the next. We release checkpoints at each stage (see below).
-
 ## Checkpoints
 We release model weights for the official Molmo2Fish model after rank 64 LoRA fine-tuning of Molmo2-8B on all CFC data.
 For convenience we also provide the link to the Molmo2-8B checkpoint that we trained from.
@@ -155,9 +134,8 @@ WANDB_API_KEY=key torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pre
 LoRA fine-tuning on the track correction task:
 
 ```bash
-WANDB_API_KEY=key torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_correction \
+torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_correction \
   --lora_vit --lora_connector --lora --lora_rank 64 \
-  --wandb.name=run_name --wandb.entity=entity --wandb.project=project \
   --save_folder=/path/to/save/folder
 ```
 

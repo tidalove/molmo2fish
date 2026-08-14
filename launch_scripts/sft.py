@@ -1,11 +1,14 @@
 import argparse
 import dataclasses
+import logging
+import os
 from dataclasses import asdict
 from os.path import join
 from typing import List
 import numpy as np
 from omegaconf import OmegaConf, omegaconf
 
+from olmo.data.cfc_hf_datasets import CFC_HF_DATASETS
 from olmo.data.data_loader import WeightedDataset, KwargsMixture, DataLoaderConfig
 from olmo.data.dynamic_packer import PackingConfig
 from olmo.eval.eval_utils import get_evaluation
@@ -21,6 +24,12 @@ from olmo.train.run_trainer import run_trainer
 from olmo.train.trainer_config import FSDPConfig, BatchDivisor, SpeedMonitorConfig, TrainConfig, \
     WandbConfig, CompilerConfig
 from olmo.util import prepare_torchrun_environment, select_checkpoint, clean_opt
+
+log = logging.getLogger(__name__)
+
+# Mixtures that train on CFC video. These are short runs, so they default to a
+# different duration and save cadence than the upstream Molmo2 mixtures.
+CFC_MIXTURES = {"cfc_track", "cfc_correction"}
 
 IMAGE_ACADEMIC_DATASETS = [
     # Supervised datasets we want eval on
@@ -271,6 +280,12 @@ def get_model(checkpoint, model):
     model_cfg.data_formatter.system_prompt = "demo_or_style_v2"
     model_cfg.mm_preprocessor.loss_token_weighting = "root_subsegments_root_tokens"
 
+    # Score only the final assistant turn. The CFC correction data is multi-turn and its
+    # ground truth is the last turn; the earlier turns are the tracks the model is being
+    # shown and asked to fix, so training on them teaches it to reproduce its own errors.
+    # Single-turn datasets are unaffected -- their last message is their only message.
+    model_cfg.mm_preprocessor.last_message_loss_only = True
+
     # Multi-image settings
     model_cfg.mm_preprocessor.image.max_multi_image_crops = 8
     model_cfg.mm_preprocessor.image.max_images = 5
@@ -423,6 +438,36 @@ def get_training_mixture(name):
             ["nlp", ["tulu4"], 0.1 - hardcode_weight],
             ["hardcodes", ["molmo2_hardcodes"], hardcode_weight]
         ]
+    elif name == "cfc_track":
+        training_mixture = [
+            ["cfc_hf_track", ["cfc_hf_track"], 0.5],
+            ["cfc_hf_target", ["cfc_hf_target"], 0.5],
+        ]
+    elif name == "cfc_correction":
+        # Rates sum to exactly 1.0. This is the recipe the released Molmo2Fish
+        # checkpoint was trained on; changing a weight changes the model.
+        training_mixture = [
+            ["cfc_hf_track", ["cfc_hf_track"], 0.15],
+            ["cfc_hf_target", ["cfc_hf_target"], 0.1],
+            ["cfc_hf_text", ["cfc_hf_text"], 0.05],
+            ["cfc_hf_synthetic_correction_full", ["cfc_hf_synthetic_correction_full"], 0.1],
+            ["cfc_hf_synthetic_correction_incomplete", ["cfc_hf_synthetic_correction_incomplete"], 0.1],
+            ["cfc_hf_synthetic_correction_wrong_only", ["cfc_hf_synthetic_correction_wrong_only"], 0.025],
+            ["cfc_hf_synthetic_correction_no_info", ["cfc_hf_synthetic_correction_no_info"], 0.05],
+            ["cfc_hf_synthetic_correction_vague", ["cfc_hf_synthetic_correction_vague"], 0.1],
+            ["cfc_hf_correction_real_full_easy", ["cfc_hf_correction_real_full_easy"], 0.05],
+            ["cfc_hf_correction_real_wrong_only_easy", ["cfc_hf_correction_real_wrong_only_easy"], 0.025],
+            ["cfc_hf_correction_real_vague_easy", ["cfc_hf_correction_real_vague_easy"], 0.05],
+            ["cfc_hf_correction_real_no_info_easy", ["cfc_hf_correction_real_no_info_easy"], 0.025],
+            ["cfc_hf_correction_real_full_hard", ["cfc_hf_correction_real_full_hard"], 0.05],
+            ["cfc_hf_correction_real_wrong_only_hard", ["cfc_hf_correction_real_wrong_only_hard"], 0.025],
+            ["cfc_hf_correction_real_vague_hard", ["cfc_hf_correction_real_vague_hard"], 0.05],
+            ["cfc_hf_correction_real_no_info_hard", ["cfc_hf_correction_real_no_info_hard"], 0.05],
+        ]
+    elif name in CFC_HF_DATASETS:
+        # Any single registered CFC dataset can be trained on by name, so fine-tuning on
+        # one subset needs no edit to this file.
+        training_mixture = [[name, [name], 1.0]]
     else:
         raise NotImplementedError(name)
     root_size_mixture: List[KwargsMixture] = []
@@ -433,21 +478,91 @@ def get_training_mixture(name):
 
 
 def main():
-    prepare_torchrun_environment()
-
     parser = argparse.ArgumentParser(prog="Train a multitask model")
     parser.add_argument("checkpoint", help="Path to checkpoint to start from")
     parser.add_argument("mixture", default="0.0.1")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--model", default="video")
     parser.add_argument("--seq_len", type=int, default=16384)
-    parser.add_argument("--device_batch_size", default=2, type=int)
+    # 1 and 2 are what every CFC video run used: 128-frame clips at seq_len 16384 do not
+    # leave room for a device batch of 2 on an 80GB card, and 6 workers per rank exhausts
+    # /dev/shm at 8 ranks. Raise both on larger cards.
+    parser.add_argument("--device_batch_size", default=1, type=int)
+    parser.add_argument("--num_workers", default=2, type=int)
     parser.add_argument("--max_loss_examples", default=2048, type=int)
     parser.add_argument("--max_inf_eval_examples", default=1280, type=int)
     parser.add_argument("--prefetch_factor", default=4, type=int)
-    parser.add_argument("--num_workers", default=6, type=int)
     parser.add_argument("--cp_degree", default=1, type=int)
+
+    parser.add_argument("--name", default=None, type=str,
+                        help="Run name, used for wandb and the checkpoint metadata")
+    parser.add_argument("--save_folder", default=None, type=str,
+                        help="Where to write checkpoints; defaults to runs/<name>")
+    parser.add_argument("--train_split", default="train")
+    parser.add_argument("--val_split", default="validation")
+
+    parser.add_argument("--max_duration", default=None, type=int)
+    parser.add_argument("--save_interval", default=None, type=int)
+    parser.add_argument("--eval_interval", default=None, type=int)
+
+    # LoRA. Each flag wraps that component's nn.Linear layers in a LoRALinear adapter:
+    #   --lora_llm        blocks' att_proj/attn_out/ff_proj/ff_out, plus the lm head
+    #   --lora_vit        ViT attention wq/wk/wv/wo and MLP w1/w2
+    #   --lora_connector  pooling attention wq/wk/wv/wo and the image projector
+    # The wrapped base weights are frozen by LoRALinear itself; the adapters train at
+    # --lora_lr. alpha/rank is a flat multiplier on the adapter output, so raising the
+    # rank without raising alpha silently shrinks the effective step on the weight delta.
+    parser.add_argument("--lora_llm", action="store_true")
+    parser.add_argument("--lora_vit", action="store_true")
+    parser.add_argument("--lora_connector", action="store_true")
+    parser.add_argument("--lora_rank", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=float, default=32.0)
+    parser.add_argument("--lora_dropout", type=float, default=0.05)
+    parser.add_argument("--lora_lr", type=float, default=1e-3)
+
+    # Adapting a component with LoRA freezes the rest of it by default, so
+    # `--lora_llm --lora_vit --lora_connector` trains the adapters and nothing else --
+    # the recipe the released Molmo2Fish checkpoint used. A component with no --lora_*
+    # flag is fully fine-tuned unless it is frozen explicitly, so
+    # `--lora_llm --freeze_connector` fully fine-tunes the ViT, LoRA fine-tunes the LLM,
+    # and freezes the connector.
+    #
+    # Pass --no-freeze_llm (etc.) to override: that keeps the adapters and additionally
+    # trains the component's remaining parameters -- its norms, embeddings and ln_f --
+    # at full rank.
+    parser.add_argument("--freeze_llm", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--freeze_vit", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--freeze_connector", action=argparse.BooleanOptionalAction, default=None)
+
     args, other_args = parser.parse_known_args()
+
+    # After parsing, so `--help` works without a torchrun rendezvous.
+    prepare_torchrun_environment()
+
+    run_name = args.name or "multitask_train"
+    # Leaving this MISSING fails much later, inside OmegaConf.to_object, with an error
+    # that does not mention the flag.
+    save_folder = args.save_folder or join("runs", run_name)
+
+    # A --lora_* flag freezes its own component unless --no-freeze_* says otherwise.
+    freeze_llm = args.lora_llm if args.freeze_llm is None else args.freeze_llm
+    freeze_vit = args.lora_vit if args.freeze_vit is None else args.freeze_vit
+    freeze_connector = (args.lora_connector if args.freeze_connector is None
+                        else args.freeze_connector)
+    ft_llm = not freeze_llm
+    ft_vit = not freeze_vit
+    ft_connector = not freeze_connector
+    log.info(f"Tuning: ft_llm={ft_llm} ft_vit={ft_vit} ft_connector={ft_connector} | "
+             f"lora_llm={args.lora_llm} lora_vit={args.lora_vit} "
+             f"lora_connector={args.lora_connector} rank={args.lora_rank} "
+             f"alpha={args.lora_alpha}")
+
+    is_cfc = args.mixture in CFC_MIXTURES or args.mixture in CFC_HF_DATASETS
+    # CFC runs are short (600 steps at a global batch of 128) so upstream's save_interval
+    # of 2000 would never fire and the run would end with no checkpoint at all.
+    max_duration = args.max_duration if args.max_duration is not None else (600 if is_cfc else 300000)
+    save_interval = args.save_interval if args.save_interval is not None else (30 if is_cfc else 2000)
+    eval_interval = args.eval_interval if args.eval_interval is not None else (30 if is_cfc else -1)
 
     if args.mixture == "debug":
         loss_eval_tasks = ["llava_video_oe_academic", "pixmo_ask_model_anything"]
@@ -463,6 +578,29 @@ def main():
         eval_tasks = [
             "chart_qa", "info_qa", "coco_2014_vqa_multi", "pointing_eval_v2:test"
         ]
+    elif args.mixture == "cfc_track":
+        loss_eval_tasks = [f"{t}:{args.val_split}" for t in [
+            "cfc_hf_track",
+            "cfc_hf_target",
+        ]]
+        eval_tasks = []
+    elif args.mixture == "cfc_correction":
+        # Deliberately a subset of the mixture, not all 16 members. Each loss eval holds
+        # its own dataloader and workers, and running one per training set OOMed the node.
+        loss_eval_tasks = [f"{t}:{args.val_split}" for t in [
+            "cfc_hf_track",
+            "cfc_hf_correction_real_full_easy",
+            "cfc_hf_correction_real_no_info_easy",
+            "cfc_hf_correction_real_full_hard",
+            "cfc_hf_correction_real_no_info_hard",
+            "cfc_hf_synthetic_correction_incomplete",
+        ]]
+        eval_tasks = []
+    elif args.mixture in CFC_HF_DATASETS:
+        # Single-dataset fine-tuning; cfc_hf_correction_real_wrong_only_easy is train-only.
+        has_val = args.val_split in CFC_HF_DATASETS[args.mixture][0].SPLIT_MAP
+        loss_eval_tasks = [f"{args.mixture}:{args.val_split}"] if has_val else []
+        eval_tasks = []
     else:
         loss_eval_tasks = ["llava_video_oe_academic", "pixmo_ask_model_anything", "pixmo_cap"]
         eval_tasks = [
@@ -498,6 +636,18 @@ def main():
         args.num_workers = 2
         args.prefetch_factor = 2
 
+    model_cfg.llm.lora = args.lora_llm
+    model_cfg.llm.lora_rank = args.lora_rank
+    model_cfg.llm.lora_alpha = args.lora_alpha
+    model_cfg.llm.lora_dropout = args.lora_dropout
+
+    if (args.lora_vit or args.lora_connector) and hasattr(model_cfg, "vision_backbone"):
+        model_cfg.vision_backbone.lora_vit = args.lora_vit
+        model_cfg.vision_backbone.lora_connector = args.lora_connector
+        model_cfg.vision_backbone.lora_rank = args.lora_rank
+        model_cfg.vision_backbone.lora_alpha = args.lora_alpha
+        model_cfg.vision_backbone.lora_dropout = args.lora_dropout
+
     num_workers = args.num_workers
     evaluations = []
     for task in eval_tasks:
@@ -532,12 +682,15 @@ def main():
 
     log_interval = 1 if args.debug else 20
     cfg = TrainConfig(
-        run_name="multitask_train",
-        save_folder=omegaconf.MISSING,
+        run_name=run_name,
+        save_folder=save_folder,
         seed=6198,
         dry_run=False,
 
-        wandb=None if args.debug else WandbConfig(
+        # WANDB_PROJECT/WANDB_ENTITY are resolved by OmegaConf below, so an unset
+        # environment would fail the run during config resolution rather than just
+        # skipping logging.
+        wandb=None if (args.debug or os.environ.get("WANDB_PROJECT") is None) else WandbConfig(
             name="${run_name}",
             project="${oc.env:WANDB_PROJECT}",
             group=None,
@@ -554,7 +707,7 @@ def main():
         data=DataLoaderConfig(
             kwargs_mixture=training_mixture,
             shuffle=True,
-            split="train",
+            split=args.train_split,
             drop_last=True,
             sequence_length=seq_len,
             max_text_seq_len=None,
@@ -566,15 +719,16 @@ def main():
             packing=PackingConfig(buffer_size=48, image_weight=30, shortcut_max_len_images=False,
                                   cp_world_size=args.cp_degree)
         ),
-        ft_connector=True,
-        ft_llm=not args.debug,
-        ft_vit=not args.debug,
+        ft_connector=ft_connector,
+        ft_llm=ft_llm and not args.debug,
+        ft_vit=ft_vit and not args.debug,
         optimizer=OptimizerConfig(
             name=OptimizerType.adamw,
             connector_learning_rate=5e-6,
             vit_learning_rate=5e-6,
             llm_learning_rate=1e-5,
             frame_selector_learning_rate=1e-4,
+            lora_learning_rate=args.lora_lr,
         ),
         scheduler=SchedulerConfig(
             name=SchedulerType.multimodal,
@@ -588,12 +742,12 @@ def main():
         fsdp=FSDPConfig(fsdp2=True),
         load_path=None,
         initial_model_checkpoint=checkpoint,
-        save_interval=2000,
-        save_num_checkpoints_to_keep=1,
+        save_interval=save_interval,
+        save_num_checkpoints_to_keep=11 if is_cfc else 1,
         global_train_batch_size=get_world_size() if args.debug else 128,
         device_train_microbatch_size=args.device_batch_size,
         time_limit=None,
-        max_duration=300000,
+        max_duration=max_duration,
         stop_at="${max_duration}",
         max_grad_norm=1,
         batch_divisor=BatchDivisor.global_batch,
@@ -606,9 +760,9 @@ def main():
         inf_evaluators=evaluations,
         evaluators=loss_evaluations,
         inf_eval_interval=-1,
-        eval_interval=-1,
-        save_final_unsharded_checkpoint=False,
-        save_final_optim=False,
+        eval_interval=eval_interval,
+        save_final_unsharded_checkpoint=is_cfc,
+        save_final_optim=is_cfc,
         response_logits_only=True,
     )
 
