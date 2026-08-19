@@ -18,6 +18,42 @@ import logging
 log = logging.getLogger(__name__)
 
 
+def points_from_masks(masks, video_fps):
+    """Build GT track points from a per-object RLE mask dict, so the points are
+    object-slot consistent with the masks used for validation.
+
+    Each object's per-frame point is the centroid of its mask bbox (via
+    `pycocotools.mask.toBbox`); the object index is the mask dict key. This is the
+    single source of truth for "GT points derived from masks", shared by the eval
+    dataset path and the standalone eval scripts so they cannot drift.
+
+    Args:
+        masks: {mask_idx_str: [rle_or_None per frame]} (all lists same length).
+        video_fps: frames-per-second used to set each frame's `time`.
+
+    Returns:
+        [{'frame', 'time', 'points': {obj_idx: {'point': [x, y], 'occluded': False}}}],
+        one entry per frame, or [] if `masks` is empty.
+    """
+    from pycocotools import mask as mask_utils
+    if not masks:
+        return []
+    n_frames = len(next(iter(masks.values())))
+    points = []
+    for frame_idx in range(n_frames):
+        frame_points = {}
+        for mask_idx_str, frame_list in masks.items():
+            rle = frame_list[frame_idx]
+            if rle is None:
+                continue
+            bx, by, bw, bh = mask_utils.toBbox(rle).tolist()
+            frame_points[int(mask_idx_str)] = {"point": [bx + bw / 2, by + bh / 2],
+                                               "occluded": False}
+        points.append({"frame": frame_idx, "time": frame_idx / video_fps,
+                       "points": frame_points})
+    return points
+
+
 def format_time(time_value, format="seconds"):
     """
     TODO [QUESTION]: Merge with `format_timestamps` in DataFormatter?
@@ -549,6 +585,16 @@ def compute_recall(row_ind: np.ndarray, col_ind: np.ndarray,
     return cnt / len(masks)
 
 
+def compute_match_count(row_ind: np.ndarray, col_ind: np.ndarray,
+                       preds: np.ndarray, masks: List[np.ndarray]) -> int:
+    """Count matched predictions that fall within their corresponding GT mask."""
+    cnt = 0
+    for i, j in zip(row_ind, col_ind):
+        if is_point_in_region(preds[i], masks[j]):
+            cnt += 1
+    return cnt
+
+
 def f1_score(precision: float, recall: float, epsilon: float = 1e-10) -> float:
     """
     Compute F1 score from precision and recall.
@@ -558,44 +604,81 @@ def f1_score(precision: float, recall: float, epsilon: float = 1e-10) -> float:
         return 0.0
     return 2 * (precision * recall) / (precision + recall + epsilon)
 
-def evaluate_frame_predictions(pred_points: List[Tuple[float, float]], 
+def evaluate_frame_predictions(pred_points: List[Tuple[float, float]],
                              gt_points: List[Tuple[float, float]],
-                             masks: List[np.ndarray]) -> Tuple[float, float, float]:
+                             masks: List[np.ndarray]) -> Tuple[float, float, float, int, int, int]:
     """
     Evaluate predictions for a single frame.
-    
+
     Args:
         pred_points: List of predicted (x, y) coordinates
-        gt_points: List of ground truth (x, y) coordinates  
+        gt_points: List of ground truth (x, y) coordinates
         masks: List of segmentation masks (one per GT point)
-        
+
     Returns:
-        Tuple of (precision, recall, f1)
+        Tuple of (precision, recall, f1, n_tp, n_pred, n_gt)
     """
     # Handle edge cases
     if len(gt_points) == 0:
         # No ground truth - perfect score if no predictions, zero if any predictions
         precision = recall = f1 = float(len(pred_points) == 0)
-        return precision, recall, f1
-        
+        n_tp = 0
+        n_pred = len(pred_points)
+        n_gt = 0
+        return precision, recall, f1, n_tp, n_pred, n_gt
+
     if len(pred_points) == 0:
         # No predictions made - zero precision and recall
-        return 0.0, 0.0, 0.0
-    
+        return 0.0, 0.0, 0.0, 0, 0, len(gt_points)
+
     # Convert to numpy arrays for distance calculation
     pred_points = np.array(pred_points)
     gt_points = np.array(gt_points)
-    
+
     # Compute pairwise distances and find optimal assignment
     distances = cdist(pred_points, gt_points)
     row_ind, col_ind = linear_sum_assignment(distances)
-    
+
     # Compute metrics based on mask overlap
-    precision = compute_precision(row_ind, col_ind, pred_points, masks)
-    recall = compute_recall(row_ind, col_ind, pred_points, masks)
+    n_tp = compute_match_count(row_ind, col_ind, pred_points, masks)
+    n_pred = len(pred_points)
+    n_gt = len(masks)
+    precision = n_tp / n_pred
+    recall = n_tp / n_gt
     f1 = f1_score(precision, recall)
-    
-    return precision, recall, f1
+
+    return precision, recall, f1, n_tp, n_pred, n_gt
+
+def load_mask_for_object(gt_masks: Dict, object_id, frame_idx: int,
+                         height: int, width: int) -> np.ndarray:
+    """Return the binary mask for one object at one frame.
+
+    Returns an empty mask if object_id is not in gt_masks, or no annotation
+    exists at frame_idx.
+    """
+    empty_mask = np.zeros((height, width), dtype=bool)
+    mask_list = gt_masks.get(str(object_id))
+    if mask_list is None:
+        return empty_mask
+
+    first_mask = None
+    for m in mask_list:
+        if m is not None:
+            first_mask = m
+            break
+    if first_mask is None:
+        return empty_mask
+
+    if isinstance(first_mask, dict) and 'frame' in first_mask:
+        for m in mask_list:
+            if m is not None and m.get('frame') == frame_idx and m.get('mask') is not None:
+                return ann_to_mask(m['mask']).astype(bool)
+        return empty_mask
+
+    if frame_idx < len(mask_list) and mask_list[frame_idx] is not None:
+        return ann_to_mask(mask_list[frame_idx]).astype(bool)
+    return empty_mask
+
 
 def load_masks_at_frame(gt_masks: Dict, frame_idx: int, height: int, width: int) -> List[np.ndarray]:
     """
@@ -648,11 +731,11 @@ def load_masks_at_frame(gt_masks: Dict, frame_idx: int, height: int, width: int)
     return masks
 
 def evaluate_video_tracks_with_masks(
-    pred_tracks: List[Dict] | List[PointTrack], 
+    pred_tracks: List[Dict] | List[PointTrack],
     gt_tracks: List[Dict] | List[PointTrack],
     gt_masks: Dict[str, List],
     height: int,
-    width: int
+    width: int,
 ) -> Dict[str, float]:
     """
     Evaluate predictions for a single video.
@@ -683,9 +766,12 @@ def evaluate_video_tracks_with_masks(
     Returns:
         Dictionary of aggregated metrics:
         {
-            'precision': float,
-            'recall': float,
-            'f1': float,
+            'precision': float,       # frame-averaged
+            'recall': float,          # frame-averaged
+            'f1': float,              # frame-averaged
+            'coco_precision': float,  # micro-averaged (sum TP / sum pred)
+            'coco_recall': float,     # micro-averaged (sum TP / sum GT)
+            'coco_f1': float,         # micro-averaged
             'num_frames': int,
             'frames_with_pred': int,
             'frames_with_gt': int,
@@ -709,7 +795,9 @@ def evaluate_video_tracks_with_masks(
     
     if not all_frames:
         # No GT and no predictions — model correctly predicted nothing
-        return {'precision': 1.0, 'recall': 1.0, 'f1': 1.0, 'num_frames': 0,
+        return {'precision': 1.0, 'recall': 1.0, 'f1': 1.0,
+                'coco_precision': 0.0, 'coco_recall': 0.0, 'coco_f1': 0.0,
+                'num_frames': 0,
                 'frames_with_pred': 0, 'frames_with_gt': 0, 'frames_with_both': 0,
                 'frames_pred_only': 0, 'frames_gt_only': 0, 'frame_details': []}
     
@@ -737,14 +825,18 @@ def evaluate_video_tracks_with_masks(
                 gt_points.append(tuple(point_data['point']))
                 object_ids.append(str(obj_id))
         
-        masks = load_masks_at_frame(gt_masks, frame_idx, height, width)
-        
+        masks = [load_mask_for_object(gt_masks, oid, frame_idx, height, width)
+                 for oid in object_ids]
+
         # Evaluate this frame
-        precision, recall, f1 = evaluate_frame_predictions(pred_points, gt_points, masks)
+        precision, recall, f1, n_tp, n_pred, n_gt = evaluate_frame_predictions(pred_points, gt_points, masks)
         frame_metrics.append({
-            'precision': precision, 
-            'recall': recall, 
+            'precision': precision,
+            'recall': recall,
             'f1': f1,
+            'n_tp': n_tp,
+            'n_pred': n_pred,
+            'n_gt': n_gt,
             'frame_idx': frame_idx,
             'has_pred': pred_frame is not None,
             'has_gt': gt_frame is not None,
@@ -756,18 +848,29 @@ def evaluate_video_tracks_with_masks(
     avg_precision = np.mean([m['precision'] for m in frame_metrics])
     avg_recall = np.mean([m['recall'] for m in frame_metrics])
     avg_f1 = np.mean([m['f1'] for m in frame_metrics])
-    
+
+    # COCO-style micro-averaged metrics (aggregate counts across all frames)
+    total_tp = sum(m['n_tp'] for m in frame_metrics)
+    total_pred = sum(m['n_pred'] for m in frame_metrics)
+    total_gt = sum(m['n_gt'] for m in frame_metrics)
+    coco_precision = total_tp / total_pred if total_pred > 0 else 0.0
+    coco_recall = total_tp / total_gt if total_gt > 0 else 0.0
+    coco_f1 = f1_score(coco_precision, coco_recall)
+
     # Calculate diagnostic statistics
     frames_with_pred = sum(1 for m in frame_metrics if m['has_pred'])
     frames_with_gt = sum(1 for m in frame_metrics if m['has_gt'])
     frames_with_both = sum(1 for m in frame_metrics if m['has_pred'] and m['has_gt'])
     frames_pred_only = sum(1 for m in frame_metrics if m['has_pred'] and not m['has_gt'])
     frames_gt_only = sum(1 for m in frame_metrics if not m['has_pred'] and m['has_gt'])
-    
+
     return {
         'precision': avg_precision,
-        'recall': avg_recall, 
+        'recall': avg_recall,
         'f1': avg_f1,
+        'coco_precision': coco_precision,
+        'coco_recall': coco_recall,
+        'coco_f1': coco_f1,
         'num_frames': len(frame_metrics),
         'frames_with_pred': frames_with_pred,
         'frames_with_gt': frames_with_gt,
@@ -838,10 +941,12 @@ class HOTAMetric:
             # Get GT data
             gt_ids_list = []
             gt_points_list = []
+            gt_object_ids_list = []
             if gt_frame is not None:
                 for obj_id, point_data in sorted(gt_frame['points'].items()):
                     gt_ids_list.append(gt_id_to_idx[str(obj_id)])
                     gt_points_list.append(point_data['point'])
+                    gt_object_ids_list.append(str(obj_id))
             
             # Get prediction data
             pred_ids_list = []
@@ -862,27 +967,30 @@ class HOTAMetric:
             
             # Compute similarity matrix
             similarity = self._compute_similarity_matrix(
-                pred_points_list, gt_points_list, gt_masks, frame_idx, height, width
+                pred_points_list, gt_points_list, gt_object_ids_list,
+                gt_masks, frame_idx, height, width,
             )
             data['similarity_scores'].append(similarity)
         
         return data
     
-    def _compute_similarity_matrix(self, pred_points, gt_points, gt_masks, frame_idx, 
+    def _compute_similarity_matrix(self, pred_points, gt_points, gt_object_ids,
+                                   gt_masks, frame_idx,
                                    height, width):
         """
         Compute similarity between predictions and GT for one frame.
         Similarity = 1 if point in mask, 0 otherwise.
-        
+
         Returns:
             similarity: (num_gt, num_pred) matrix
         """
         if len(pred_points) == 0 or len(gt_points) == 0:
             return np.zeros((len(gt_points), len(pred_points)))
-        
-        # Load masks for this frame
-        masks = load_masks_at_frame(gt_masks, frame_idx, height, width)
-        
+
+        # Load masks for this frame, aligned with gt_points by object id
+        masks = [load_mask_for_object(gt_masks, oid, frame_idx, height, width)
+                 for oid in gt_object_ids]
+
         similarity = np.zeros((len(gt_points), len(pred_points)))
         
         for i, (gt_point, mask) in enumerate(zip(gt_points, masks)):
@@ -1013,19 +1121,19 @@ def evaluate_video_object_tracking(
     gt_tracks: List[Dict],
     gt_masks: Dict,
     height: int,
-    width: int
+    width: int,
 ) -> Dict[str, float]:
     """
     Evaluate predictions with both spatial metrics (P/R/F1) and tracking metrics (HOTA).
     """
     # Compute existing spatial metrics
     spatial_metrics = evaluate_video_tracks_with_masks(
-        pred_tracks, gt_tracks, gt_masks, height, width
+        pred_tracks, gt_tracks, gt_masks, height, width,
     )
-    
+
     # Compute HOTA tracking metrics
     hota_metric = HOTAMetric()
-    hota_data = hota_metric.prepare_data_for_hota(pred_tracks, gt_tracks, gt_masks, 
+    hota_data = hota_metric.prepare_data_for_hota(pred_tracks, gt_tracks, gt_masks,
                                                   height, width)
     hota_results = hota_metric.compute_hota(hota_data)
     
@@ -1038,6 +1146,10 @@ def evaluate_video_object_tracking(
         'precision': spatial_metrics['precision'],
         'recall': spatial_metrics['recall'],
         'f1': spatial_metrics['f1'],
+
+        'coco_precision': spatial_metrics['coco_precision'],
+        'coco_recall': spatial_metrics['coco_recall'],
+        'coco_f1': spatial_metrics['coco_f1'],
         
         # HOTA tracking metrics (ID consistency)
         'HOTA': float(hota_results['HOTA'][alpha_05_idx]),

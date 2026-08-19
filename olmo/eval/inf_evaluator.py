@@ -20,7 +20,8 @@ from .evaluators import (
     VinogroundEval, VixMoCaptionEval, QVHighlightsEval,
     TomatoEval, TemporalBenchEval, Dream1KCaptionEval, MMEVideoOCREval, VideoHallucerEval,
     MMIUEval, LVBenchEval, MulSetEval, Ego3dBenchEval, VSIBenchEval,
-    VideoObjectTrackingEval, VixMoPointCountEval, VixMoPointEval,
+    VideoObjectTrackingEval, CFCVideoTrackingEval, CFCTrackCorrectionEval, CFC_RIVERS,
+    VixMoPointCountEval, VixMoPointEval,
     PointBenchEval, ScreenSpotProEvaluator, ScreenSpotEvaluator, OsWorldGEvaluator
 )
 from .open_ended_qa_eval import OpenQaEvaluator
@@ -129,6 +130,17 @@ class InfEvaluator:
                 for k in list(resolved_metrics.keys()):
                     if "MSE" in k:
                         resolved_metrics[k.replace("MSE", "RMSE")] = np.sqrt(resolved_metrics[k])
+            elif isinstance(metric, CFCVideoTrackingEval):
+                # nMAE = sum_videos |net_pred - net_gt| / sum_videos (gt_left + gt_right),
+                # a ratio of two global sums computed after the distributed reduction. Same per river.
+                def _ratio(n, d):
+                    return n / d if (n is not None and d is not None and d != 0) else float("nan")
+                resolved_metrics["nMAE"] = _ratio(resolved_metrics.get("nMAE_numerator"),
+                                                  resolved_metrics.get("nMAE_denominator"))
+                for river, _ in CFC_RIVERS:
+                    resolved_metrics[f"nMAE_{river}"] = _ratio(
+                        resolved_metrics.get(f"nMAE_numerator_{river}"),
+                        resolved_metrics.get(f"nMAE_denominator_{river}"))
             elif isinstance(metric, (PointBenchEval,)):
                 resolved_metrics["average"] = sum(resolved_metrics.get(cat) for cat in PointBenchEval.CATEGORIES) / len(PointBenchEval.CATEGORIES)
             elif isinstance(metric, (CountEval, PointCountEval, VixMoPointCountEval)):
@@ -227,8 +239,11 @@ class EvaluatorConfig(BaseConfig):
 
     """ Video Object Tracking evaluation """
     video_object_tracking_eval: str = '' # path with object tracking predictions
+    cfc_track_eval: str = '' # CFC task name; uses CFCVideoTrackingEval (adds nMAE + per-river metrics)
     video_single_point_prediction: str='' # path with single point predicitons
     video_point_tracking_eval: str = ''
+    # CFC multi-turn correction task; CFCTrackCorrectionEval adds before/after HOTA
+    video_track_correction_eval: bool = False
     """Video pointing task name to run evaluation on (e.g., 'mevis_point_track_per_frame_fps_6_sample_fps_1')"""
     
     """Whether to run RefExp evaluation"""
@@ -305,6 +320,10 @@ class EvaluatorConfig(BaseConfig):
             evaluators.append(MMEVideoOCREval(self.num_wandb_examples))
         elif self.video_object_tracking_eval:
             evaluators.append(VideoObjectTrackingEval(self.num_wandb_examples))
+        if self.cfc_track_eval:
+            evaluators.append(CFCVideoTrackingEval(self.num_wandb_examples))
+        if self.video_track_correction_eval:
+            evaluators.append(CFCTrackCorrectionEval(self.num_wandb_examples))
         if self.qv_highlights_eval:
             evaluators.append(QVHighlightsEval(self.num_wandb_examples))
         if self.open_qa_eval:
