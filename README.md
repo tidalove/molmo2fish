@@ -16,17 +16,29 @@
   </a>
 </p>
 
-Video object tracking is important to various population monitoring, behavioral analysis, and wildlife management use cases in ecology. But dealing with tracks in video manually--whether annotating new tracks in video, or modifying existing/predicted tracks to make data ready for downstream analysis--still requires lots of human time and labor.
+Video object tracking is important to various population monitoring, behavioral analysis, and wildlife management use cases in ecology. But dealing with tracks in video manually—whether annotating new tracks in video, or modifying existing/predicted tracks to make data ready for downstream analysis—still requires lots of human time and labor.
 
-Could a model with sufficient intelligence in both **natural language and spatiotemporal reasoning** help more easily make targeted edits to tracks in video, still leveraging the user's domain knowledge without the tedious process of manually annotating every frame? We trained Molmo2Fish by fine-tuning [Molmo2](), Ai2's open video understanding, pointing, and tracking model, on thousands of *correction trajectories* to treat the track correction task as a conversation in which it incorporates the user's feedback as natural language.
+<h3>
+Could a model with sufficient intelligence in both <em>natural language and spatiotemporal reasoning</em> help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame? 
+</h3>
+
+We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://github.com/allenai/molmo2), Ai2's open video understanding, pointing, and tracking model, on thousands of fish tracking correction trajectories. Molmo2Fish treats the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
 <video src="https://github.com/user-attachments/assets/1dfb98e2-33d2-43d9-8d68-74ea858a8ea1" controls width="700"></video>
 
-Molmo2Fish was developed to answer the following questions:
+<details>
+<summary><strong>More video examples</strong></summary>
 
-**Can we adapt Molmo2 to a visual domain far outside its training regime?** ***Yes***: LoRA finetuning on the tracking task brings Molmo2's performance from 5% tracking accuracy to 79% tracking accuracy.
+<video src="https://github.com/user-attachments/assets/7799836a-a614-42a7-8e4b-dbea732d8633" controls width="700"></video>
+<video src="https://github.com/user-attachments/assets/cc429865-7538-4c80-9586-f21a4abe001b" controls width="700"></video>
+<video src="https://github.com/user-attachments/assets/650dde9e-ef2d-4553-bd3c-f07e0e24b973" controls width="700"></video>
+<video src="https://github.com/user-attachments/assets/e934bee6-4022-40f3-84e6-7c994cf3de37" controls width="700"></video>
 
-**Can we teach Molmo2 to understand the track correction task--and more broadly, the skill of referring back to its previous prediction--even though this wasn't part of its original training data?** ***Yes***: versions of Molmo2 trained without our track correction data don't perform well on the track correction task (even if they've seen the fish sonar data and perform well at pure tracking), while LoRA finetuning on the tracking task brings significant gains over the pre-correction step.
+</details>
+
+**Can we adapt Molmo2 to a visual domain far outside its training regime?** ***Yes.*** LoRA finetuning on the tracking task brings Molmo2's performance from 5% tracking accuracy to 79% tracking accuracy.
+
+**Can we teach Molmo2 to understand the track correction task—and more broadly, the skill of referring back to its previous prediction—even though this wasn't part of its original training data?** ***Yes.*** Versions of Molmo2 trained without our track correction data don't perform well on the track correction task (even if they've seen the fish sonar data and perform well at pure tracking), while LoRA finetuning on the tracking task brings significant gains over the pre-correction step.
 
 **Can Molmo2Fish use language guidance to intelligently correct flawed predictions?** ***Sometimes***. We probe this question by comparing the corrections Molmo2Fish makes in response to a generic prompt like "Fix all mistakes" to the corrections it makes in response to a detailed prompt specifying all the mistakes. (During training, it sees both variants of the task.) Molmo2Fish is able to correct the "easiest" mistakes regardless of whether the fixes are specified, and unable to correct the "hardest" mistakes regardless of whether the fixes are specified. Only for mistakes falling into an "intermediate" range of difficulty is language guidance necessary and sufficient for Molmo2Fish to make a better correction based on language.
 
@@ -36,17 +48,7 @@ We train Molmo2Fish on a variety of data. A **synthetic** correction set artific
 
 Each point here represents one correction trajectory: one pre-correction set of tracks on a video (whether synthetically corrupted, or produced via inference with Molmo or YOLO), whose track accuracy vs. ground truth is on the x axis; and Molmo2Fish's output, or the post-correction tracks, whose track accuracy is on the y axis. (Only the "targeted" evaluation has a different ground truth from the rest, according to the selected mistakes the model was asked to make, which is why a generic "fix all mistakes" prompt *degrades* performance on the "targeted" pre-correction baseline.)
 
-See our paper for details, ablations, a description of the data generation pipeline, more correction examples, and more experiments. The rest of this README is focused on our code.
-
-<details>
-<summary>More video examples</summary>
-
-<video src="https://github.com/user-attachments/assets/7799836a-a614-42a7-8e4b-dbea732d8633" controls width="700"></video>
-<video src="https://github.com/user-attachments/assets/cc429865-7538-4c80-9586-f21a4abe001b" controls width="700"></video>
-<video src="https://github.com/user-attachments/assets/650dde9e-ef2d-4553-bd3c-f07e0e24b973" controls width="700"></video>
-<video src="https://github.com/user-attachments/assets/e934bee6-4022-40f3-84e6-7c994cf3de37" controls width="700"></video>
-
-</details>
+See [our paper]() for details, ablations, a description of the data generation pipeline, more correction examples, and more experiments. The rest of this README is focused on our code.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -68,9 +70,9 @@ This repository is an extension of Ai2's open vision language model, Molmo2, to 
 
 - LoRA fine-tuning
 - Training and evaluation on track correction tasks
-- Utilities specific to the [Caltech Fish Counting]() dataset
+- Utilities specific to the [Caltech Fish Counting](https://huggingface.co/datasets/perona-lab/cfc26) dataset
 
-Molmo2 is state-of-the-art among open-source models and demonstrates exceptional new capabilities in point-driven grounding in video tasks. This README is written to be self-contained but does not include the information on different training stages and validation on the original, full Molmo2 video data corpus that is detailed in [Ai2's repository](). Instead, we focus on a full walkthrough of the new contributions listed above.
+Molmo2 is state-of-the-art among open-source models and demonstrates exceptional new capabilities in point-driven grounding in video tasks. This README is written to be self-contained but does not include the information on different training stages and validation on the original, full Molmo2 video data corpus that is detailed in [Ai2's repository](https://github.com/allenai/molmo2). Instead, we focus on a full walkthrough of the new contributions listed above.
 
 # Setup
 ## Installation
@@ -101,7 +103,7 @@ python -m scripts.download_datasets cfc --n_proc 8
 
 Downloading can be resumed if canceled or an error occurs mid-download.
 
-The tracking task on this dataset is *not equivalent* to the tracking task on the original CFC dataset. Compared to the videos in the original CFC dataset release, we subsample frames in time by a factor of 3: we encode videos at 6fps and construct the tracking task at 2fps, in line with the Molmo2 video tracking approach, for the sake of simplicity and to reuse existing utils when possible. We also slice many videos from their full lengths to shorter clips, some overlapping with each other, in order to fit both tracking and track correction tasks within the model's context window on our GPUs. All metrics in our paper, including metrics from the traditional two-stage tracking-by-detection YOLO+SORT pipeline, are reported on this modified video set, and *not* on the original CFC videos.
+**Note:** The tracking task on this dataset is *not equivalent* to the tracking task on the original CFC dataset. Compared to the videos in the original CFC dataset release, we subsample frames in time by a factor of 3: we encode videos at 6fps and construct the tracking task at 2fps, in line with the Molmo2 video tracking approach, for the sake of simplicity and to reuse existing utils when possible. We also slice many videos from their full lengths to shorter clips, some overlapping with each other, in order to fit both tracking and track correction tasks within the model's context window on our GPUs. All metrics in our paper, including metrics from the traditional two-stage tracking-by-detection YOLO+SORT pipeline, are reported on this modified video set, and *not* on the original CFC videos.
 
 ## Environment
 Generally training runs should use these flags:
@@ -131,7 +133,7 @@ and `WANDB_API_KEY` is for wandb logging.
 ## Checkpoints
 We release model weights for the official Molmo2Fish model after rank 64 LoRA fine-tuning of Molmo2-8B on all CFC data.
 For convenience we also provide the link to the Molmo2-8B checkpoint that we trained from.
-For earlier checkpoints of Molmo2-4B, 7B, and 8B after various training stages, see the original Molmo2 [repo]().
+For earlier checkpoints of Molmo2-4B, 7B, and 8B after various training stages, see the original Molmo2 [repo](https://github.com/allenai/molmo2).
 
 To use this checkpoint download it, untar it, and it can be evaluated or used as a starting point for fine-tuning.
 It contains both the huggingface format checkpoint and the raw weights.
@@ -218,41 +220,11 @@ eval script will re-use cached metrics if they exist. See `EvalConfig` for addit
 
 The original eval script (with our modifications to support the multi-turn conversation format) at `launch_scripts/eval.py` also works, but is much slower and was tested less extensively.
 
-### Supported Evaluation Groups
-
-TODO: fill this in
-
-| Task name | Benchmarks |
-|---|---|
-| `single_image` | COCO VQA, TextVQA, ChartQA, DocQA, InfoQA, AI2D, MMMU, RealWorldQA, MathVista, CountBench, PixMo Count, PointingEval v2, PointBench |
-| `single_image_test` | Test splits of image tasks + A-OKVQA (MC & DA) |
-| `multi_image` | MuirBench, MMIU, BLINK |
-| `short_video` | MVBench, TOMATO, MotionBench, TempCompass, PerceptionTest, EgoSchema, NeXTQA |
-| `long_video` | VideoMME (w/ and w/o subtitles), LongVideoBench (w/ and w/o subtitles), LVBench, MLVU, VixMo Caps, VideoEvalPro |
-| `video` | `short_video` + `long_video` |
-| `video_no_subtitle` | `short_video` + long video benchmarks without subtitles |
-| `video_subtitle` | Long video benchmarks with subtitles only |
-| `video_pointing` | VixMo Points (count & point eval), MeViS point tracking |
-| `image_pointing` | CountBench, PixMo Count, PointingEval v2, PointBench |
-| `tracking` | MeViS, Ref-YT-VOS, Ref-DAVIS17, ReasonVOS, Molmo2VideoTrack |
-| `test_video` | Test-split video benchmarks (MLVU, PerceptionTest, EgoSchema, MotionBench, LongVideoBench) |
-
-Individual task names (e.g. `chart_qa`, `mvbench`, `mevis_track_eval_1fps:test`) can also be passed directly.
-
-### Evaluation Tips
-
-- `NCCL_TIMEOUT_MINUTES=20` can be needed if evaluating long video benchmarks where individual
-processes can finish at very different times.
-- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is a torch setting that can reduce the chance of OOM errors.
-- Memory costs can also be reduced by using the `load_bf16` flag to keep the weights in bfloat16.
-We don't use this by default but it generally does not affect performance.
-- Both commands can be run with multi-node configuration using `--nnodes` and `--node_rank` as usual with torchrun.
-
 # Citation
 
 ```
 @article{molmo2fish,
-    title={Teach a Molmo2Fish: Towards interactive },
+    title={Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance},
     author={Kai van Brunt and Justin Kay and Sara Beery},
     year={2026},
     journal={arXiv preprint arXiv:2601.10611}
