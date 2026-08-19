@@ -20,7 +20,7 @@ Video object tracking is important to various population monitoring, behavioral 
 
 Could a model with sufficient intelligence in both **natural language and spatiotemporal reasoning** help more easily make targeted edits to tracks in video, still leveraging the user's domain knowledge without the tedious process of manually annotating every frame? We trained Molmo2Fish by fine-tuning [Molmo2](), Ai2's open video understanding, pointing, and tracking model, on thousands of *correction trajectories* to treat the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
-<video src="" controls></video>
+<video src="https://github.com/user-attachments/assets/1dfb98e2-33d2-43d9-8d68-74ea858a8ea1" controls width="700"></video>
 
 Molmo2Fish was developed to answer the following questions:
 
@@ -41,10 +41,10 @@ See our paper for details, ablations, a description of the data generation pipel
 <details>
 <summary>More video examples</summary>
 
-<video src="" controls></video>
-<video src="" controls></video>
-<video src="" controls></video>
-<video src="" controls></video>
+<video src="https://github.com/user-attachments/assets/7799836a-a614-42a7-8e4b-dbea732d8633" controls width="700"></video>
+<video src="https://github.com/user-attachments/assets/cc429865-7538-4c80-9586-f21a4abe001b" controls width="700"></video>
+<video src="https://github.com/user-attachments/assets/650dde9e-ef2d-4553-bd3c-f07e0e24b973" controls width="700"></video>
+<video src="https://github.com/user-attachments/assets/e934bee6-4022-40f3-84e6-7c994cf3de37" controls width="700"></video>
 
 </details>
 
