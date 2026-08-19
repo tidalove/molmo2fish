@@ -5,9 +5,6 @@
   <h1>Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance</h1>
 </div>
 <p align="center">
-  <a href="https://github.com/allenai/molmo2/LICENSE">
-    <img alt="GitHub License" src="https://img.shields.io/github/license/allenai/OLMo">
-  </a>
   <a href="https://arxiv.org/abs/2601.10611">
     <img alt="Paper URL" src="https://img.shields.io/badge/arxiv-2601.10611-blue">
   </a>
@@ -19,13 +16,37 @@
   </a>
 </p>
 
-This repository is an extension of Ai2's open vision language model, Molmo2, for fish tracking and track correction. It preserves all the functionality of Ai2's original Molmo2 release. Our new contributions, described in [our paper]() and implemented in this repo, are:
+Video object tracking is important to various population monitoring, behavioral analysis, and wildlife management use cases in ecology. But dealing with tracks in video manually--whether annotating new tracks in video, or modifying existing/predicted tracks to make data ready for downstream analysis--still requires lots of human time and labor.
 
-- LoRA fine-tuning
-- Training and evaluation on track correction tasks
-- Utilities specific to the [Caltech Fish Counting]() dataset we use as an initial testbed for track correction capabilities
+Could a model with sufficient intelligence in both **natural language and spatiotemporal reasoning** help more easily make targeted edits to tracks in video, still leveraging the user's domain knowledge without the tedious process of manually annotating every frame? We trained Molmo2Fish by fine-tuning [Molmo2](), Ai2's open video understanding, pointing, and tracking model, on thousands of *correction trajectories* to treat the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
-Molmo2 is state-of-the-art among open-source models and demonstrates exceptional new capabilities in point-driven grounding in single image, multi-image, and video tasks as shown below. This README is written to be self-contained but does not include the information on different training stages and validation on the original, full Molmo2 video data corpus that is detailed in [Ai2's repository](). Instead, we focus on a full walkthrough of the new contributions listed above.
+<video src="" controls></video>
+
+Molmo2Fish was developed to answer the following questions:
+
+**Can we adapt Molmo2 to a visual domain far outside its training regime?** ***Yes***: LoRA finetuning on the tracking task brings Molmo2's performance from 5% tracking accuracy to 79% tracking accuracy.
+
+**Can we teach Molmo2 to understand the track correction task--and more broadly, the skill of referring back to its previous prediction--even though this wasn't part of its original training data?** ***Yes***: versions of Molmo2 trained without our track correction data don't perform well on the track correction task (even if they've seen the fish sonar data and perform well at pure tracking), while LoRA finetuning on the tracking task brings significant gains over the pre-correction step.
+
+**Can Molmo2Fish use language guidance to intelligently correct flawed predictions?** ***Sometimes***. We probe this question by comparing the corrections Molmo2Fish makes in response to a generic prompt like "Fix all mistakes" to the corrections it makes in response to a detailed prompt specifying all the mistakes. (During training, it sees both variants of the task.) Molmo2Fish is able to correct the "easiest" mistakes regardless of whether the fixes are specified, and unable to correct the "hardest" mistakes regardless of whether the fixes are specified. Only for mistakes falling into an "intermediate" range of difficulty is language guidance necessary and sufficient for Molmo2Fish to make a better correction based on language.
+
+We train Molmo2Fish on a variety of data. A **synthetic** correction set artificially applies corruptions to ground truth tracks and asks the model to correct them. A **targeted** set artificially applies corruptions and asks the model to correct *only* one or two mistakes. **Molmo-low** and **Molmo-high** represent correction trajectories on predictions from a low-performing (early checkpoint) and high-performing (late checkpoint) version of Molmo2, respectively. Finally, the two-stage tracking-by-detection **YOLO+SORT** pipeline produces , used only in evaluation.
+
+<img src="assets/hota_before_after_anim.gif" alt="HOTA before/after correction" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
+
+Each point here represents one correction trajectory: one pre-correction set of tracks on a video (whether synthetically corrupted, or produced via inference with Molmo or YOLO), whose track accuracy vs. ground truth is on the x axis; and Molmo2Fish's output, or the post-correction tracks, whose track accuracy is on the y axis. (Only the "targeted" evaluation has a different ground truth from the rest, according to the selected mistakes the model was asked to make, which is why a generic "fix all mistakes" prompt *degrades* performance on the "targeted" pre-correction baseline.)
+
+See our paper for details, ablations, a description of the data generation pipeline, more correction examples, and more experiments. The rest of this README is focused on our code.
+
+<details>
+<summary>More video examples</summary>
+
+<video src="" controls></video>
+<video src="" controls></video>
+<video src="" controls></video>
+<video src="" controls></video>
+
+</details>
 
 ## Table of Contents
 - [Overview](#overview)
@@ -43,13 +64,13 @@ Molmo2 is state-of-the-art among open-source models and demonstrates exceptional
 
 # Overview
 
-TODO: overview of main paper results and conclusions
+This repository is an extension of Ai2's open vision language model, Molmo2, to the tasks of fish tracking and track correction. It preserves all the functionality of Ai2's original Molmo2 release. Our new contributions, described in [our paper]() and implemented in this repo, are:
 
-<img src="assets/hota_before_after_anim.gif" alt="HOTA before/after correction" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
+- LoRA fine-tuning
+- Training and evaluation on track correction tasks
+- Utilities specific to the [Caltech Fish Counting]() dataset
 
-TODO: correction example, maybe also as a gif?
-
-TODO: concise results table
+Molmo2 is state-of-the-art among open-source models and demonstrates exceptional new capabilities in point-driven grounding in video tasks. This README is written to be self-contained but does not include the information on different training stages and validation on the original, full Molmo2 video data corpus that is detailed in [Ai2's repository](). Instead, we focus on a full walkthrough of the new contributions listed above.
 
 # Setup
 ## Installation
@@ -80,7 +101,7 @@ python -m scripts.download_datasets cfc --n_proc 8
 
 Downloading can be resumed if canceled or an error occurs mid-download.
 
-The tracking task on this dataset is *not equivalent* to the tracking task on the original CFC dataset. Compared to the videos in the original CFC dataset release, we subsample frames in time by a factor of 3: we encode videos at 6fps and construct the tracking task at 2fps, in line with the Molmo2 video tracking approach, for the sake of simplicity and to reuse existing utils when possible. We also slice many videos from their full lengths to shorter clips, some overlapping with each other, in order to fit both tracking and track correction tasks within the model's context window on our GPUs. All metrics in our paper, including metrics from the traditional two-stage detection-by-tracking YOLO+SORT pipeline, are reported on this modified video set, and *not* on the original CFC videos.
+The tracking task on this dataset is *not equivalent* to the tracking task on the original CFC dataset. Compared to the videos in the original CFC dataset release, we subsample frames in time by a factor of 3: we encode videos at 6fps and construct the tracking task at 2fps, in line with the Molmo2 video tracking approach, for the sake of simplicity and to reuse existing utils when possible. We also slice many videos from their full lengths to shorter clips, some overlapping with each other, in order to fit both tracking and track correction tasks within the model's context window on our GPUs. All metrics in our paper, including metrics from the traditional two-stage tracking-by-detection YOLO+SORT pipeline, are reported on this modified video set, and *not* on the original CFC videos.
 
 ## Environment
 Generally training runs should use these flags:
@@ -124,20 +145,23 @@ tar -xf Molmo2-8B.tar
 ## Fine-tuning
 Multitask training can be done with `launch_scripts/sft.py`. You must specify the training mixture and the model checkpoint to start from.
 
-Fully fine-tuning on just the tracking task:
+Fully fine-tuning on just the tracking task, with wandb logging:
 ```bash
-WANDB_API_KEY=key torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_track \
+WANDB_API_KEY=key torchrun --nproc-per-node=8 \
+  launch_scripts/sft.py /path/to/pretrained/model cfc_track \
   --wandb.name=run_name --wandb.entity=entity --wandb.project=project \
   --save_folder=/path/to/save/folder
 ```
 
-LoRA fine-tuning on the track correction task:
+LoRA fine-tuning on the track correction task, without wandb logging:
 
 ```bash
 torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_correction \
   --lora_vit --lora_connector --lora --lora_rank 64 \
   --save_folder=/path/to/save/folder
 ```
+
+TODO: example with some component fully frozen
 
 Here `/path/to/pretrained/model` points to a model checkpoint to start from (typically a pretrained model)
 and `cfc_track` or `cfc_correction` refers to what training mixture to use.
