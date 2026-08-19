@@ -455,14 +455,14 @@ def get_training_mixture(name):
             ["cfc_hf_synthetic_correction_wrong_only", ["cfc_hf_synthetic_correction_wrong_only"], 0.025],
             ["cfc_hf_synthetic_correction_no_info", ["cfc_hf_synthetic_correction_no_info"], 0.05],
             ["cfc_hf_synthetic_correction_vague", ["cfc_hf_synthetic_correction_vague"], 0.1],
-            ["cfc_hf_correction_real_full_easy", ["cfc_hf_correction_real_full_easy"], 0.05],
-            ["cfc_hf_correction_real_wrong_only_easy", ["cfc_hf_correction_real_wrong_only_easy"], 0.025],
-            ["cfc_hf_correction_real_vague_easy", ["cfc_hf_correction_real_vague_easy"], 0.05],
-            ["cfc_hf_correction_real_no_info_easy", ["cfc_hf_correction_real_no_info_easy"], 0.025],
-            ["cfc_hf_correction_real_full_hard", ["cfc_hf_correction_real_full_hard"], 0.05],
-            ["cfc_hf_correction_real_wrong_only_hard", ["cfc_hf_correction_real_wrong_only_hard"], 0.025],
-            ["cfc_hf_correction_real_vague_hard", ["cfc_hf_correction_real_vague_hard"], 0.05],
-            ["cfc_hf_correction_real_no_info_hard", ["cfc_hf_correction_real_no_info_hard"], 0.05],
+            ["cfc_hf_correction_molmo_high_full", ["cfc_hf_correction_molmo_high_full"], 0.05],
+            ["cfc_hf_correction_molmo_high_wrong_only", ["cfc_hf_correction_molmo_high_wrong_only"], 0.025],
+            ["cfc_hf_correction_molmo_high_vague", ["cfc_hf_correction_molmo_high_vague"], 0.05],
+            ["cfc_hf_correction_molmo_high_no_info", ["cfc_hf_correction_molmo_high_no_info"], 0.025],
+            ["cfc_hf_correction_molmo_low_full", ["cfc_hf_correction_molmo_low_full"], 0.05],
+            ["cfc_hf_correction_molmo_low_wrong_only", ["cfc_hf_correction_molmo_low_wrong_only"], 0.025],
+            ["cfc_hf_correction_molmo_low_vague", ["cfc_hf_correction_molmo_low_vague"], 0.05],
+            ["cfc_hf_correction_molmo_low_no_info", ["cfc_hf_correction_molmo_low_no_info"], 0.05],
         ]
     elif name in CFC_HF_DATASETS:
         # Any single registered CFC dataset can be trained on by name, so fine-tuning on
@@ -589,15 +589,15 @@ def main():
         # its own dataloader and workers, and running one per training set OOMed the node.
         loss_eval_tasks = [f"{t}:{args.val_split}" for t in [
             "cfc_hf_track",
-            "cfc_hf_correction_real_full_easy",
-            "cfc_hf_correction_real_no_info_easy",
-            "cfc_hf_correction_real_full_hard",
-            "cfc_hf_correction_real_no_info_hard",
+            "cfc_hf_correction_molmo_high_full",
+            "cfc_hf_correction_molmo_high_no_info",
+            "cfc_hf_correction_molmo_low_full",
+            "cfc_hf_correction_molmo_low_no_info",
             "cfc_hf_synthetic_correction_incomplete",
         ]]
         eval_tasks = []
     elif args.mixture in CFC_HF_DATASETS:
-        # Single-dataset fine-tuning; cfc_hf_correction_real_wrong_only_easy is train-only.
+        # Single-dataset fine-tuning; cfc_hf_correction_molmo_high_wrong_only is train-only.
         has_val = args.val_split in CFC_HF_DATASETS[args.mixture][0].SPLIT_MAP
         loss_eval_tasks = [f"{args.mixture}:{args.val_split}"] if has_val else []
         eval_tasks = []

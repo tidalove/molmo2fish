@@ -1,12 +1,9 @@
 """Standalone dataset bases for the CFC hub path.
 
-Deliberately independent of the CFC and LocalTrackingDataset classes in
-academic_video_track_datasets.py: those are local additions to this fork, absent
-from upstream molmo2, so inheriting from them would tie the CFC release to a
-patched copy of a 4.6k-line file. The only symbols imported from there are ones
-that are byte-identical to upstream (checked against `upstream/main`); the two
-helpers whose local versions differ — get_image_files and encode_frames_to_video
-— are covered by patches/frame_encoding_natsort_x264.patch instead.
+Deliberately independent of the tracking dataset classes in
+academic_video_track_datasets.py: inheriting from them would tie the CFC path to
+a 4.6k-line file that is otherwise unchanged from upstream Molmo2. The only
+symbols imported from there are ones that are byte-identical to upstream.
 
 Everything the CFC hub path needs lives in olmo/data/cfc_{base,frames,hf_datasets}.py.
 Data root is $MOLMO_DATA_DIR/video_datasets/video_track/CFC/.
@@ -85,7 +82,8 @@ class CFCDatasetBase(Dataset):
     EXPRESSION = "fish"
     SPLIT_MAP = {}
 
-    def __init__(self, split, task, sampling_fps=None, use_fps_sampling=True):
+    def __init__(self, split, task, sampling_fps=None, use_fps_sampling=True,
+                 is_eval=None):
         assert task in TRACKING_TASKS, f"Invalid task: {task}"
         assert task in self.TASKS, \
             f"Task '{task}' not supported for {self.DATASET_NAME}. Available: {self.TASKS}"
@@ -95,8 +93,11 @@ class CFCDatasetBase(Dataset):
         self.task = task
         self.sampling_fps = sampling_fps
         self.use_fps_sampling = use_fps_sampling
-        # train-v2 and friends are training splits, everything else is eval
-        self.is_eval = not (split == "train" or split.startswith("train-"))
+        # Controls only whether get() attaches GT (masks/points/mask_id) to
+        # metadata, never the prompt. Defaults to "eval on anything but train",
+        # but scoring a train split is legitimate (the masks are on the hub for
+        # every split), so callers can force it — see olmo/eval/standalone_eval.py.
+        self.is_eval = (split != "train") if is_eval is None else is_eval
         self.data_split = self.SPLIT_MAP[split]
         self.video_home = self._get_home(self.data_split)
         self.video_dir = self._get_video_dir(self.data_split)
@@ -193,9 +194,11 @@ class CFCDatasetBase(Dataset):
     def get(self, idx, rng):
         ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
 
-        # self.sampling_fps is set explicitly (e.g. 2 for eval); None = "resolve
-        # from the loaded video". _create_message_list reads this.
-        ex['sampling_fps'] = self.sampling_fps
+        # Constructor value wins (e.g. 2 for eval); fall back to the row's own
+        # cadence so an example always carries an explicit sampling_fps and the
+        # prompt never has to back-derive it from the loaded video.
+        sampling_fps = self.sampling_fps or ex.get('sampling_fps')
+        ex['sampling_fps'] = sampling_fps  # _create_message_list reads this
 
         video_path = join(self.video_dir, ex['video'] + '.mp4')
         message_list = self._create_message_list(ex)
@@ -207,7 +210,7 @@ class CFCDatasetBase(Dataset):
             'w': ex['width'],
             'h': ex['height'],
             'video_fps': ex.get('fps', self.VIDEO_FPS),
-            'sampling_fps': self.sampling_fps,
+            'sampling_fps': sampling_fps,
             'video': ex['video'],
         }
 
@@ -216,15 +219,15 @@ class CFCDatasetBase(Dataset):
                 'frame_sample_mode': 'fps',
                 'candidate_sampling_fps': self._get_candidate_fps(
                     ex.get('fps', self.VIDEO_FPS)),
-                'min_fps': self.sampling_fps or 1,
+                'min_fps': sampling_fps or 1,
             }
 
         item = {
             'video': video_path,
             'message_list': message_list,
-            'sampling_fps': self.sampling_fps,
+            'sampling_fps': sampling_fps,
             'metadata': metadata,
-            'fps': str(self.sampling_fps) if self.sampling_fps else None,
+            'fps': str(sampling_fps) if sampling_fps else None,
             'label': ex['expression']
         }
 
@@ -319,8 +322,12 @@ class CFCMultiTurnBase(CFCDatasetBase):
         return message_list
 
     def get(self, idx, rng):
-        ex = self.data[idx]
+        ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
         video_fps = ex.get("fps", self.VIDEO_FPS)
+        # Same rule as CFCDatasetBase.get: constructor value wins, row is the
+        # fallback. Correction rows always carry their own sampling_fps.
+        sampling_fps = self.sampling_fps or ex.get('sampling_fps')
+        ex['sampling_fps'] = sampling_fps
         message_list = self._create_message_list(ex)
 
         metadata = {
@@ -330,7 +337,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
             'w': ex['width'],
             'h': ex['height'],
             'video_fps': video_fps,
-            'sampling_fps': self.sampling_fps,
+            'sampling_fps': sampling_fps,
         }
         if self.HAS_VIDEO:
             metadata['video'] = ex['video']
@@ -339,7 +346,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
             metadata['sampler_overrides'] = {
                 'frame_sample_mode': 'fps',
                 'candidate_sampling_fps': self._get_candidate_fps(video_fps),
-                'min_fps': ex['sampling_fps'],
+                'min_fps': sampling_fps,
             }
 
         if self.is_eval:
@@ -364,9 +371,9 @@ class CFCMultiTurnBase(CFCDatasetBase):
 
         item = {
             'multi_turn_messages': message_list,
-            'sampling_fps': ex['sampling_fps'],
+            'sampling_fps': sampling_fps,
             'metadata': metadata,
-            'fps': str(ex['sampling_fps']),
+            'fps': str(sampling_fps) if sampling_fps else None,
             'label': ex['expression']
         }
         if self.HAS_VIDEO:
