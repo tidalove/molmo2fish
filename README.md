@@ -5,14 +5,11 @@
   <h1>Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance</h1>
 </div>
 <p align="center">
-  <a href="https://arxiv.org/abs/2601.10611">
-    <img alt="Paper URL" src="https://img.shields.io/badge/arxiv-2601.10611-blue">
+  <a href="https://huggingface.co/tidalove/Molmo2Fish">
+    <img alt="Model Checkpoint" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Model-yellow">
   </a>
-  <a href="https://huggingface.co/collections/allenai/molmo2">
-    <img alt="Model Checkpoints" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Models-yellow">
-  </a>
-  <a href="https://huggingface.co/collections/allenai/molmo2-data">
-    <img alt="Molmo2Fish Datasets" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Datasets-yellow">
+  <a href="https://huggingface.co/datasets/tidalove/cfc-track-instruction">
+    <img alt="Molmo2Fish Datasets" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Dataset-yellow">
   </a>
 </p>
 
@@ -22,7 +19,7 @@ Video object tracking is important to various population monitoring, behavioral 
 Could a model with sufficient intelligence in both <em>natural language and spatiotemporal reasoning</em> help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame? 
 </h3>
 
-We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://github.com/allenai/molmo2), Ai2's open video understanding, pointing, and tracking model, on thousands of fish tracking correction trajectories. Molmo2Fish treats the track correction task as a conversation in which it incorporates the user's feedback as natural language.
+We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://github.com/allenai/molmo2), Ai2's open video understanding, pointing, and tracking model, on thousands of [fish tracking](https://huggingface.co/datasets/perona-lab/cfc26) correction trajectories. Molmo2Fish treats the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
 <video src="https://github.com/user-attachments/assets/1dfb98e2-33d2-43d9-8d68-74ea858a8ea1" controls width="700"></video>
 
@@ -36,13 +33,32 @@ We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://git
 
 </details>
 
-**Can we adapt Molmo2 to a visual domain far outside its training regime?** ***Yes.*** LoRA finetuning on the tracking task brings Molmo2's performance from 5% tracking accuracy to 79% tracking accuracy.
+**Can we adapt Molmo2 to a visual domain far outside its training regime?** ***Yes.*** LoRA finetuning on the fish tracking task brings Molmo2's performance from 5% tracking accuracy to 79% tracking accuracy.
 
-**Can we teach Molmo2 to understand the track correction task—and more broadly, the skill of referring back to its previous prediction—even though this wasn't part of its original training data?** ***Yes.*** Versions of Molmo2 trained without our track correction data don't perform well on the track correction task (even if they've seen the fish sonar data and perform well at pure tracking), while LoRA finetuning on the tracking task brings significant gains over the pre-correction step.
+**Can we teach Molmo2 to understand the track correction task—and more broadly, the skill of referring back to its previous prediction—even though this wasn't part of its original training data?** ***Yes.*** Versions of Molmo2 trained without our track correction data don't perform well on the track correction task (even if they've seen the fish sonar data and perform well at pure tracking), while LoRA finetuning on the correction task brings significant gains over the pre-correction step.
 
 **Can Molmo2Fish use language guidance to intelligently correct flawed predictions?** ***Sometimes***. We probe this question by comparing the corrections Molmo2Fish makes in response to a generic prompt like "Fix all mistakes" to the corrections it makes in response to a detailed prompt specifying all the mistakes. (During training, it sees both variants of the task.) Molmo2Fish is able to correct the "easiest" mistakes regardless of whether the fixes are specified, and unable to correct the "hardest" mistakes regardless of whether the fixes are specified. Only for mistakes falling into an "intermediate" range of difficulty is language guidance necessary and sufficient for Molmo2Fish to make a better correction based on language.
 
-We train Molmo2Fish on a variety of data. A **synthetic** correction set artificially applies corruptions to ground truth tracks and asks the model to correct them. A **targeted** set artificially applies corruptions and asks the model to correct *only* one or two mistakes. **Molmo-low** and **Molmo-high** represent correction trajectories on predictions from a low-performing (early checkpoint) and high-performing (late checkpoint) version of Molmo2, respectively. Finally, the two-stage tracking-by-detection **YOLO+SORT** pipeline produces , used only in evaluation.
+We train Molmo2Fish on a variety of data. A **synthetic** correction set artificially applies corruptions to ground truth tracks and asks the model to correct them. A **targeted** set artificially applies corruptions and asks the model to correct only one or two mistakes. **Molmo-low** and **Molmo-high** represent correction trajectories on predictions from a low-performing (early checkpoint) and high-performing (late checkpoint) version of Molmo2, respectively. Finally, the two-stage tracking-by-detection **YOLO+SORT** pipeline produces correction trajectories used only in evaluation.
+
+In the code and on the hub, each of these is a family of datasets, one per prompt
+tier — `full` (every mistake spelled out), `vague` (the same mistakes, tersely),
+`wrong_only` (generic, but says mistakes exist), and `no_info` (generic and
+non-committal):
+
+| in the paper | dataset names |
+|---|---|
+| tracking | `cfc_hf_track` (track all fish), `cfc_hf_target` (track a referred subset) |
+| targeted | `cfc_hf_synthetic_correction_incomplete` |
+| synthetic | `cfc_hf_synthetic_correction_{full,vague,wrong_only,no_info}` |
+| Molmo-high | `cfc_hf_correction_molmo_high_{full,vague,wrong_only,no_info}` |
+| Molmo-low | `cfc_hf_correction_molmo_low_{full,vague,wrong_only,no_info}` |
+| YOLO+SORT | `cfc_hf_correction_yolo_{full,vague,wrong_only,no_info}` (validation only) |
+| text-only | `cfc_hf_text` |
+
+Append `_eval_2fps` to any of these to get its evaluation task name. The
+[hub config names](https://huggingface.co/datasets/tidalove/cfc-track-instruction)
+are the same minus the `cfc_hf_` prefix (e.g. `cfc_correction_molmo_low_full`).
 
 <img src="assets/hota_before_after_anim.gif" alt="HOTA before/after correction" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
 
@@ -58,7 +74,7 @@ See [our paper]() for details, ablations, a description of the data generation p
   - [Environment](#environment)
 - [Training and Evaluations](#training-and-evaluations)
   - [Checkpoints](#checkpoints)
-  - [Fine-tuning](#fine-training)
+  - [Fine-tuning](#fine-tuning)
   - [Evaluation](#evaluation)
     - [Install Vision Process Package](#install-vision-process-package)
     - [Install vLLM (\>= 0.15.0)](#install-vllm--0150)
@@ -76,7 +92,7 @@ Molmo2 is state-of-the-art among open-source models and demonstrates exceptional
 
 # Setup
 ## Installation
-We recommend using python >= 3.11 
+We recommend using python >= 3.11; the package itself requires >= 3.10.
 First install [PyTorch](https://pytorch.org) according to the instructions specific to your operating system.
 
 To install dependencies, run:
@@ -88,8 +104,9 @@ pip install torchcodec
 pip install -e .[all]
 ```
 
-It's recommended to install torchcodec separately since it has some complex dependencies that 
-can break if installed in combination with the others as done using `install -e .[all]`
+`torchcodec` is a required dependency either way, but it's worth installing first and on its
+own: it has some complex dependencies that can break when resolved together with everything
+else in `install -e .[all]`.
 
 
 ## Downloading Data
@@ -98,7 +115,7 @@ Our data are stored and described in more detail on [huggingface](https://huggin
 
 ```bash
 export MOLMO_DATA_DIR=./data/
-python -m scripts.download_datasets cfc --n_proc 8
+python -m scripts.download_datasets cfc --n-procs 8
 ```
 
 Downloading can be resumed if canceled or an error occurs mid-download.
@@ -114,6 +131,8 @@ OLMO_SHARED_FS=1
 HF_ACCESS_TOKEN=YOUR_HF_KEY
 OPENAI_API_KEY=YOUR_OPENAI_API_KEY
 WANDB_API_KEY=YOUR_WANDB_KEY
+WANDB_PROJECT=YOUR_WANDB_PROJECT
+WANDB_ENTITY=YOUR_WANDB_ENTITY
 OMP_NUM_THREADS=8
 ```
 
@@ -126,44 +145,84 @@ file system.
 `HF_ACCESS_TOKEN` might be used to download the tokenizer, `OPENAI_API_KEY` might be used in some evaluations, 
 and `WANDB_API_KEY` is for wandb logging.
 
+`WANDB_PROJECT` is what actually switches wandb on: `launch_scripts/sft.py` disables wandb
+entirely when it is unset, and any `--wandb.*` override then fails during config resolution.
+Set `WANDB_PROJECT` and `WANDB_ENTITY` if you want logging, and leave them unset if you don't.
+
 `OMP_NUM_THREADS` is for torch.
+
+The CFC data path has three escape hatches, all read by `olmo/data/cfc_hf_datasets.py`:
+
+- `CFC_HF_REPO` — load annotations from a different hub repo (default `tidalove/cfc-track-instruction`)
+- `CFC_STAGE_FRAMES=0` — skip fetching frames from `perona-lab/cfc26`, for when you have
+  already placed them at `$MOLMO_DATA_DIR/video_datasets/video_track/CFC/JPEGImages/{video_id}/`
+- `CFC_REQUIRE_VIDEO=0` — keep rows whose mp4 has not been encoded, instead of dropping them
 
 # Training and Evaluations
 
 ## Checkpoints
-We release model weights for the official Molmo2Fish model after rank 64 LoRA fine-tuning of Molmo2-8B on all CFC data.
-For convenience we also provide the link to the Molmo2-8B checkpoint that we trained from.
-For earlier checkpoints of Molmo2-4B, 7B, and 8B after various training stages, see the original Molmo2 [repo](https://github.com/allenai/molmo2).
 
-To use this checkpoint download it, untar it, and it can be evaluated or used as a starting point for fine-tuning.
-It contains both the huggingface format checkpoint and the raw weights.
-For example:
+We release the Molmo2Fish weights at [tidalove/Molmo2Fish](https://huggingface.co/tidalove/Molmo2Fish):
+rank 64 LoRA fine-tuning of Molmo2-8B on all CFC data, step 420. The repo holds two things —
+the HuggingFace-format weights at the root, which is what vLLM and `launch_scripts/hf_eval.py`
+consume, and a tar of the raw training checkpoint (model + optimizer state) for resuming
+fine-tuning.
 
+```bash
+# HF format, ready to evaluate (--exclude keeps the 37GB raw tar out of it)
+hf download tidalove/Molmo2Fish --exclude "*.tar" --local-dir Molmo2Fish-HF/step420-hf
+
+# raw weights, to resume training from
+hf download tidalove/Molmo2Fish Molmo2Fish-step420-raw.tar --local-dir .
+tar -xf Molmo2Fish-step420-raw.tar
 ```
+
+For convenience we also provide the link to the Molmo2-8B checkpoint that we trained from.
+Download and untar it to use as a fine-tuning starting point:
+
+```bash
 wget https://storage.googleapis.com/oe-training-public/Molmo2-1225/Molmo2-8B.tar
 tar -xf Molmo2-8B.tar
 ```
+
+For earlier checkpoints of Molmo2-4B, 7B, and 8B after various training stages, see the original Molmo2 [repo](https://github.com/allenai/molmo2).
 
 ## Fine-tuning
 Multitask training can be done with `launch_scripts/sft.py`. You must specify the training mixture and the model checkpoint to start from.
 
 Fully fine-tuning on just the tracking task, with wandb logging:
 ```bash
-WANDB_API_KEY=key torchrun --nproc-per-node=8 \
+WANDB_API_KEY=key WANDB_PROJECT=project WANDB_ENTITY=entity \
+  torchrun --nproc-per-node=8 \
   launch_scripts/sft.py /path/to/pretrained/model cfc_track \
-  --wandb.name=run_name --wandb.entity=entity --wandb.project=project \
+  --wandb.name=run_name \
   --save_folder=/path/to/save/folder
 ```
 
-LoRA fine-tuning on the track correction task, without wandb logging:
+`WANDB_PROJECT` and `WANDB_ENTITY` have to be in the environment: wandb is switched off
+entirely when `WANDB_PROJECT` is unset, and a `--wandb.*` override on top of that fails
+during config resolution.
+
+LoRA fine-tuning on the track correction task, without wandb logging. This is the recipe the
+released Molmo2Fish checkpoint used:
 
 ```bash
 torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_correction \
-  --lora_vit --lora_connector --lora --lora_rank 64 \
+  --lora_llm --lora_vit --lora_connector --lora_rank 64 \
   --save_folder=/path/to/save/folder
 ```
 
-TODO: example with some component fully frozen
+There is one `--lora_*` flag per component, and **a component with no `--lora_*` flag is
+fully fine-tuned**, not left alone — so dropping `--lora_llm` above would LoRA-adapt the ViT
+and connector while full fine-tuning the LLM. Freeze a component explicitly to leave it out
+of training entirely. For example, LoRA on the LLM, a fully frozen ViT, and a fully
+fine-tuned connector:
+
+```bash
+torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_correction \
+  --lora_llm --lora_rank 64 --freeze_vit \
+  --save_folder=/path/to/save/folder
+```
 
 Here `/path/to/pretrained/model` points to a model checkpoint to start from (typically a pretrained model)
 and `cfc_track` or `cfc_correction` refers to what training mixture to use.
@@ -199,7 +258,9 @@ python3 -m olmo.hf_model.convert_molmo2_to_hf \
     --override_max_model_len 36864
 ```
 
-The downloads above include the HF-compatible formats, which can be pointed to directly, no conversion necessary.
+The Molmo2Fish download above is already in HF format and can be pointed to directly, no
+conversion necessary. The Molmo2-8B tar holds raw training weights, so convert it first if
+you want to evaluate the base model.
 
 Evaluation can be done with the `launch_scripts/hf_eval.py` script.
 
@@ -209,14 +270,32 @@ To eval on a single task:
 python launch_scripts/hf_eval.py /path/to/model/hf/checkpoint task_name
 ```
 
-E.g. to eval our Molmo2Fish checkpoint on the molmo-low validation subset, with fully detailed correction prompts:
+E.g. to eval our Molmo2Fish checkpoint on the Molmo-low validation subset, with fully detailed correction prompts:
 
 ```bash
-python launch_scripts/hf_eval.py Molmo2Fish-HF/step300-hf cfc_correction_molmo-low_full_eval_2fps
+python launch_scripts/hf_eval.py Molmo2Fish-HF/step420-hf cfc_hf_correction_molmo_low_full_eval_2fps
 ```
 
-This will save the metrics and predictions under `results/Molmo2Fish/results/cfc_correction_molmo-low_full_eval_2fps/validation`. Future calls to the
-eval script will re-use cached metrics if they exist. See `EvalConfig` for additional config options.
+This will save `predictions.json` and `metrics.json` under
+`results/cfc_hf_correction_molmo_low_full_eval_2fps/validation` (override with `--save_dir`).
+Note that a second call re-runs inference from scratch unless you pass `--resume`; what it
+will not do is overwrite an existing `metrics.json` unless you pass `--overwrite`.
+
+Scoring is separable from generation. To re-score a `predictions.json` you already have,
+with no GPU and no model:
+
+```bash
+python launch_scripts/hf_eval.py - cfc_hf_correction_molmo_low_full_eval_2fps \
+  --predictions results/cfc_hf_correction_molmo_low_full_eval_2fps/validation/predictions.json \
+  --overwrite
+```
+
+For correction tasks the metrics include `HOTA_before` (the tracks the model was handed),
+`HOTA_after` (what it returned), and `norm_delta_HOTA`, the fraction of the available
+headroom it closed — plus a per-river breakdown and the directional net-count error `nMAE`.
+Run `python launch_scripts/hf_eval.py --help` for the full set of options (`--split`,
+`--max_examples`, `--chunk_size`, `--max_tokens`, `--max_fps`, `--gpu_memory_utilization`,
+`--num_shards`/`--shard_index`, and more).
 
 The original eval script (with our modifications to support the multi-turn conversation format) at `launch_scripts/eval.py` also works, but is much slower and was tested less extensively.
 
@@ -226,7 +305,6 @@ The original eval script (with our modifications to support the multi-turn conve
 @article{molmo2fish,
     title={Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance},
     author={Kai van Brunt and Justin Kay and Sara Beery},
-    year={2026},
-    journal={arXiv preprint arXiv:2601.10611}
+    year={2026}
 }
 ```
