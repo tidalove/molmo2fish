@@ -104,20 +104,23 @@ pip install torchcodec
 pip install -e .[all]
 ```
 
+To install dependencies including vLLM (optional but strongly recommended for evaluation), you can run the following or see [Install vLLM](#install-vllm--0150) for more details:
+
+```bash
+git clone https://github.com/tidalove/molmo2fish.git
+cd molmo2fish
+pip install uv
+uv pip install vllm --torch-backend=auto
+pip install torchcodec
+pip install -e .[all]
+pip install --no-cache-dir "molmo-utils[torchcodec]"
+```
+
 `torchcodec` is a required dependency either way, but it's worth installing first and on its
 own: it has some complex dependencies that can break when resolved together with everything
 else in `install -e .[all]`.
 
-You also need **`ffmpeg` on your `PATH`, built with libx264**. It is not a pip dependency:
-`scripts/download_datasets.py` shells out to the `ffmpeg` binary to encode the CFC clips into
-mp4s, so a missing one only shows up after the frames have already downloaded. Check with:
-
-```bash
-ffmpeg -version && ffmpeg -hide_banner -encoders | grep libx264
-```
-
-Nothing here is version-sensitive — any reasonably recent build should work. The released
-videos were encoded with ffmpeg 4.4.2, the Ubuntu 22.04 system package.
+You also need `ffmpeg` on your `PATH`, built with libx264. The videos used for our training and evaluation were encoded with ffmpeg 4.4.2, the Ubuntu 22.04 system package.
 
 
 ## Downloading Data
