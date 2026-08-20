@@ -75,8 +75,6 @@ def river_of(clip):
         return "kenai"
     if re.search(r"_(RightFar|RightNear)_", clip):
         return "rightbank"
-    # kenai-channel and eel (ARIS_*) clips live in other tarballs and are not
-    # part of the track-instruction release; fail loudly rather than guess.
     raise ValueError(f"Cannot map clip to a CFC26 river tarball: {clip}")
 
 
@@ -121,20 +119,10 @@ def _convert_worker(item):
 
 
 def unavailable_path(source_root):
-    """Where the record of frames the release does not carry lives.
-
-    Beside SourceFrames/ (so CFC/cfc26_unavailable.json for a real tree, and its
-    own copy for a sandboxed --source-root), same rule as the tarball dir.
-    """
     return join(dirname(source_root.rstrip("/")), UNAVAILABLE_FILENAME)
 
 
 def _load_unavailable(path):
-    """Read the record -> ({clip: {"river": r, "indices": set}}, {video_id}).
-
-    Absent or corrupt reads as empty: the cost of forgetting is one extra
-    tarball pass, which is what the file exists to avoid, not a wrong result.
-    """
     if not exists(path):
         return {}, set()
     try:
@@ -198,14 +186,6 @@ class StageReport:
 
 def _plan(videos, jpeg_dir_fn, source_root, report,
           unavailable_clips=None, unavailable_videos=()):
-    """Work out which source frames are missing. Returns (todo, wanted).
-
-    todo:   [(video_id, clip, offset, n_frames, river)] for videos needing work
-    wanted: {river: {hub_or_local_clip_name: {index: out_path}}}
-
-    Frames and videos previously found to be absent from the release are left out
-    of both, so a river whose only gaps are permanent is never fetched again.
-    """
     unavailable_clips = unavailable_clips or {}
     todo = []
     wanted = defaultdict(lambda: defaultdict(dict))
@@ -216,8 +196,7 @@ def _plan(videos, jpeg_dir_fn, source_root, report,
             report.already_done += 1
             continue
         if video_id in unavailable_videos:
-            # the release cannot complete it; skip the per-frame stat pass that
-            # every later config would otherwise repeat for no gain
+            # the release cannot complete it; skip the per-frame stat pass 
             report.skipped_unavailable += 1
             continue
         clip, offset = split_window(video_id)
@@ -267,9 +246,7 @@ def _download_tar(river, tar_dir):
 def _extract_river(river, clips, tar_path, n_procs, report):
     """Convert every wanted frame of one river out of its tarball.
 
-    Returns {clip: {index: out_path}} for what the tarball did not have. The scan
-    only breaks early once nothing is left to find, so a non-empty return always
-    means the whole member list was read and those frames are genuinely absent.
+    Returns {clip: {index: out_path}} for what the tarball did not have. 
     """
     lookup = _resolve_hub_names(clips)
     remaining = {clip: dict(idx) for clip, idx in clips.items()}
@@ -338,11 +315,6 @@ def _extract_river(river, clips, tar_path, n_procs, report):
 def _link_video(video_id, clip, offset, n_frames, river, frames_dir, source_root,
                 report, absent_indices=()):
     """Hardlink a video's frames out of SourceFrames/.
-
-    Returns True when the video is incomplete and every gap is a frame the
-    release does not carry — i.e. nothing is left to fetch and it should be
-    recorded rather than retried. A gap from a failed convert returns False so
-    the next run picks it up again.
     """
     os.makedirs(frames_dir, exist_ok=True)
     missing = n_absent = 0
@@ -373,22 +345,6 @@ def _link_video(video_id, clip, offset, n_frames, river, frames_dir, source_root
 def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
                   keep_tars=None, tar_dir=None, dry_run=False, recheck_missing=None):
     """Make sure every video's frame directory exists and is complete.
-
-    Args:
-        videos: {video_id: n_frames}. n_frames is the native (6 fps) count, as
-            stored on the hub rows, and is the number of files the video's
-            JPEGImages dir must hold.
-        jpeg_dir_fn: video_id -> frames directory to populate.
-        source_root: root for the single real copy of each source frame
-            (CFC/SourceFrames).
-        n_procs: workers for JPEG decode/re-encode.
-        rivers: restrict work to these rivers (default: whatever is needed).
-        keep_tars: keep the downloaded tarballs instead of deleting them
-            (default: CFC26_KEEP_TARS=1).
-        tar_dir: where to download tarballs (default: alongside source_root).
-        dry_run: report what would be fetched, change nothing.
-        recheck_missing: re-check frames previously found absent from the release
-            instead of trusting the record (default: CFC26_RECHECK_MISSING=1).
     """
     if keep_tars is None:
         keep_tars = os.environ.get("CFC26_KEEP_TARS", "0") == "1"
@@ -423,7 +379,6 @@ def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
         wanted = {r: c for r, c in wanted.items() if r in rivers}
         todo = [t for t in todo if t[-1] in rivers]
     if recheck_missing:
-        # drop what we are about to re-derive, keep the rivers this run never touches
         touched = set(wanted)
         ledger_clips = {c: e for c, e in ledger_clips.items() if e["river"] not in touched}
         ledger_videos -= set(videos)
@@ -445,8 +400,6 @@ def ensure_frames(videos, jpeg_dir_fn, source_root, n_procs=1, rivers=None,
         try:
             still = _extract_river(river, clips, tar_path, n_procs, report)
         except Exception:
-            # keep the tarball so a retry (e.g. the next config in a group
-            # download) resumes instead of refetching tens of GB
             log.error(f"[cfc26] extraction failed; keeping {tar_path} for a retry")
             raise
         if not keep_tars and exists(tar_path):

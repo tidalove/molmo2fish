@@ -1440,11 +1440,7 @@ class DataFormatter(BaseConfig):
         video_info = example.get("video", {})
         timestamps = video_info.get("timestamps", None)
 
-        # Filter frames to match actual video timestamps. Multi-turn examples get
-        # the outer message's video dict copied onto every turn (see get_messages),
-        # so no timestamps here means there is genuinely no video attached — the
-        # text-only correction datasets (cfc_hf_text) — and there is nothing to
-        # filter against.
+        # Filter frames to match actual video timestamps.
         frames_data = example["points"]
         frames_data = (frames_data if timestamps is None
                        else self._filter_frames_to_video(frames_data, timestamps))
@@ -1500,7 +1496,6 @@ class DataFormatter(BaseConfig):
         
         # assert len(frames_data) > 0, "No frames left after filtering/sampling"
 
-        # An authored prompt (every turn of a correction trajectory) is used verbatim
         if "question" in example:
             prompt = example["question"]
         else:

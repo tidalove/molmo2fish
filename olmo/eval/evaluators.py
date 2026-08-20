@@ -2393,8 +2393,12 @@ class VideoObjectTrackingEval(Evaluator):
         return out
 
 
+# The four rivers the CFC release actually carries. "Channel" (kenai channel) was
+# listed here historically but matches no video in any config, so it only ever
+# emitted a set of NaN metrics. A clip that does not match any river is counted in
+# the overall metrics and warned about, so dropping it here cannot hide data.
 CFC_RIVERS = [("kenai", "Left"), ("rightbank", "Right"), ("elwha", "Elwha"),
-              ("nusagak", "Nusagak"), ("channel", "Channel")]
+              ("nusagak", "Nusagak")]
 
 
 def _cfc_river(name):

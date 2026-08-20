@@ -4,8 +4,6 @@
 
 Runs vLLM inference over the task's dataset and then scores the result with the
 task's own evaluators, writing predictions.json and metrics.json side by side.
-Everything comes from the dataset classes — no hand-built metadata, no jsons
-staged on disk beyond what `scripts/download_datasets.py` produces.
 
 Examples:
     python launch_scripts/hf_eval.py Molmo2-8B-HF cfc_hf_track_eval_2fps
@@ -30,8 +28,6 @@ from olmo.util import prepare_cli_environment
 
 log = logging.getLogger(__name__)
 
-# Preference order when --split is not given. Eval splits first; `train` is last
-# because scoring it is legitimate but usually not what you meant.
 SPLIT_PREFERENCE = ["validation", "test", "train"]
 
 
