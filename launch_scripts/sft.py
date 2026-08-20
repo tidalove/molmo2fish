@@ -27,8 +27,6 @@ from olmo.util import prepare_torchrun_environment, select_checkpoint, clean_opt
 
 log = logging.getLogger(__name__)
 
-# Mixtures that train on CFC video. These are short runs, so they default to a
-# different duration and save cadence than the upstream Molmo2 mixtures.
 CFC_MIXTURES = {"cfc_track", "cfc_correction"}
 
 IMAGE_ACADEMIC_DATASETS = [
@@ -280,10 +278,6 @@ def get_model(checkpoint, model):
     model_cfg.data_formatter.system_prompt = "demo_or_style_v2"
     model_cfg.mm_preprocessor.loss_token_weighting = "root_subsegments_root_tokens"
 
-    # Score only the final assistant turn. The CFC correction data is multi-turn and its
-    # ground truth is the last turn; the earlier turns are the tracks the model is being
-    # shown and asked to fix, so training on them teaches it to reproduce its own errors.
-    # Single-turn datasets are unaffected -- their last message is their only message.
     model_cfg.mm_preprocessor.last_message_loss_only = True
 
     # Multi-image settings
@@ -444,8 +438,6 @@ def get_training_mixture(name):
             ["cfc_hf_target", ["cfc_hf_target"], 0.5],
         ]
     elif name == "cfc_correction":
-        # Rates sum to exactly 1.0. This is the recipe the released Molmo2Fish
-        # checkpoint was trained on; changing a weight changes the model.
         training_mixture = [
             ["cfc_hf_track", ["cfc_hf_track"], 0.15],
             ["cfc_hf_target", ["cfc_hf_target"], 0.1],
@@ -465,8 +457,6 @@ def get_training_mixture(name):
             ["cfc_hf_correction_molmo_low_no_info", ["cfc_hf_correction_molmo_low_no_info"], 0.05],
         ]
     elif name in CFC_HF_DATASETS:
-        # Any single registered CFC dataset can be trained on by name, so fine-tuning on
-        # one subset needs no edit to this file.
         training_mixture = [[name, [name], 1.0]]
     else:
         raise NotImplementedError(name)
@@ -484,9 +474,6 @@ def main():
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--model", default="video")
     parser.add_argument("--seq_len", type=int, default=16384)
-    # 1 and 2 are what every CFC video run used: 128-frame clips at seq_len 16384 do not
-    # leave room for a device batch of 2 on an 80GB card, and 6 workers per rank exhausts
-    # /dev/shm at 8 ranks. Raise both on larger cards.
     parser.add_argument("--device_batch_size", default=1, type=int)
     parser.add_argument("--num_workers", default=2, type=int)
     parser.add_argument("--max_loss_examples", default=2048, type=int)
@@ -504,14 +491,6 @@ def main():
     parser.add_argument("--max_duration", default=None, type=int)
     parser.add_argument("--save_interval", default=None, type=int)
     parser.add_argument("--eval_interval", default=None, type=int)
-
-    # LoRA. Each flag wraps that component's nn.Linear layers in a LoRALinear adapter:
-    #   --lora_llm        blocks' att_proj/attn_out/ff_proj/ff_out, plus the lm head
-    #   --lora_vit        ViT attention wq/wk/wv/wo and MLP w1/w2
-    #   --lora_connector  pooling attention wq/wk/wv/wo and the image projector
-    # The wrapped base weights are frozen by LoRALinear itself; the adapters train at
-    # --lora_lr. alpha/rank is a flat multiplier on the adapter output, so raising the
-    # rank without raising alpha silently shrinks the effective step on the weight delta.
     parser.add_argument("--lora_llm", action="store_true")
     parser.add_argument("--lora_vit", action="store_true")
     parser.add_argument("--lora_connector", action="store_true")
@@ -519,32 +498,17 @@ def main():
     parser.add_argument("--lora_alpha", type=float, default=32.0)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
     parser.add_argument("--lora_lr", type=float, default=1e-3)
-
-    # Adapting a component with LoRA freezes the rest of it by default, so
-    # `--lora_llm --lora_vit --lora_connector` trains the adapters and nothing else --
-    # the recipe the released Molmo2Fish checkpoint used. A component with no --lora_*
-    # flag is fully fine-tuned unless it is frozen explicitly, so
-    # `--lora_llm --freeze_connector` fully fine-tunes the ViT, LoRA fine-tunes the LLM,
-    # and freezes the connector.
-    #
-    # Pass --no-freeze_llm (etc.) to override: that keeps the adapters and additionally
-    # trains the component's remaining parameters -- its norms, embeddings and ln_f --
-    # at full rank.
     parser.add_argument("--freeze_llm", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--freeze_vit", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--freeze_connector", action=argparse.BooleanOptionalAction, default=None)
 
     args, other_args = parser.parse_known_args()
 
-    # After parsing, so `--help` works without a torchrun rendezvous.
     prepare_torchrun_environment()
 
     run_name = args.name or "multitask_train"
-    # Leaving this MISSING fails much later, inside OmegaConf.to_object, with an error
-    # that does not mention the flag.
     save_folder = args.save_folder or join("runs", run_name)
 
-    # A --lora_* flag freezes its own component unless --no-freeze_* says otherwise.
     freeze_llm = args.lora_llm if args.freeze_llm is None else args.freeze_llm
     freeze_vit = args.lora_vit if args.freeze_vit is None else args.freeze_vit
     freeze_connector = (args.lora_connector if args.freeze_connector is None
@@ -557,12 +521,9 @@ def main():
              f"lora_connector={args.lora_connector} rank={args.lora_rank} "
              f"alpha={args.lora_alpha}")
 
-    is_cfc = args.mixture in CFC_MIXTURES or args.mixture in CFC_HF_DATASETS
-    # CFC runs are short (600 steps at a global batch of 128) so upstream's save_interval
-    # of 2000 would never fire and the run would end with no checkpoint at all.
-    max_duration = args.max_duration if args.max_duration is not None else (600 if is_cfc else 300000)
-    save_interval = args.save_interval if args.save_interval is not None else (30 if is_cfc else 2000)
-    eval_interval = args.eval_interval if args.eval_interval is not None else (30 if is_cfc else -1)
+    max_duration = args.max_duration
+    save_interval = args.save_interval
+    eval_interval = args.eval_interval
 
     if args.mixture == "debug":
         loss_eval_tasks = ["llava_video_oe_academic", "pixmo_ask_model_anything"]
@@ -585,8 +546,6 @@ def main():
         ]]
         eval_tasks = []
     elif args.mixture == "cfc_correction":
-        # Deliberately a subset of the mixture, not all 16 members. Each loss eval holds
-        # its own dataloader and workers, and running one per training set OOMed the node.
         loss_eval_tasks = [f"{t}:{args.val_split}" for t in [
             "cfc_hf_track",
             "cfc_hf_correction_molmo_high_full",
@@ -597,7 +556,6 @@ def main():
         ]]
         eval_tasks = []
     elif args.mixture in CFC_HF_DATASETS:
-        # Single-dataset fine-tuning; cfc_hf_correction_molmo_high_wrong_only is train-only.
         has_val = args.val_split in CFC_HF_DATASETS[args.mixture][0].SPLIT_MAP
         loss_eval_tasks = [f"{args.mixture}:{args.val_split}"] if has_val else []
         eval_tasks = []
@@ -687,9 +645,6 @@ def main():
         seed=6198,
         dry_run=False,
 
-        # WANDB_PROJECT/WANDB_ENTITY are resolved by OmegaConf below, so an unset
-        # environment would fail the run during config resolution rather than just
-        # skipping logging.
         wandb=None if (args.debug or os.environ.get("WANDB_PROJECT") is None) else WandbConfig(
             name="${run_name}",
             project="${oc.env:WANDB_PROJECT}",
@@ -743,7 +698,7 @@ def main():
         load_path=None,
         initial_model_checkpoint=checkpoint,
         save_interval=save_interval,
-        save_num_checkpoints_to_keep=11 if is_cfc else 1,
+        save_num_checkpoints_to_keep=1,
         global_train_batch_size=get_world_size() if args.debug else 128,
         device_train_microbatch_size=args.device_batch_size,
         time_limit=None,
@@ -761,8 +716,8 @@ def main():
         evaluators=loss_evaluations,
         inf_eval_interval=-1,
         eval_interval=eval_interval,
-        save_final_unsharded_checkpoint=is_cfc,
-        save_final_optim=is_cfc,
+        save_final_unsharded_checkpoint=False,
+        save_final_optim=False,
         response_logits_only=True,
     )
 

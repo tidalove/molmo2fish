@@ -1,11 +1,7 @@
 """vLLM batch inference over a Molmo2 dataset.
 
 Turns dataset examples into vLLM inputs, runs them in chunks, and writes a
-predictions.json. The interesting part is multi-turn: a correction example is a
-whole conversation (pre-correction tracks, a correction instruction, the repaired
-tracks, possibly several rounds of that), and it has to be rendered with exactly
-the turn structure training used or the model sees a prompt shape it was never
-trained on. build_multi_turn_chat does that by running every turn back through
+predictions.json. build_multi_turn_chat adds multi-turn evaluation capability by running every turn back through
 the training DataFormatter.
 
 Entry point: launch_scripts/hf_eval.py.
@@ -23,8 +19,6 @@ from olmo.preprocessing.data_formatter import (
 
 log = logging.getLogger(__name__)
 
-# Mirrors the released Molmo2 checkpoint's training config. The prompt text the
-# model was tuned on depends on all of these, so they are not free knobs.
 MOLMO2_FORMATTER_KWARGS = dict(
     prompt_templates="uber_model_v2",
     message_format="qwen3",
@@ -53,18 +47,12 @@ def build_multi_turn_chat(raw, video_path=None, max_frames=None,
                           frame_sample_mode=None, max_fps=None, sampling_fps=None):
     """Render a multi_turn_messages example (the correction format) into a chat list.
 
-    Each turn goes through DataFormatter.get_user_prompt, which yields the same
-    (prompt, response) pair training would have produced for it — so the closed
-    turns carry the model's own track syntax rather than a paraphrase. Non-final
-    turns emit user+assistant; the final turn emits user only, leaving the model
-    to generate the corrected tracks.
-
-    The video is attached to the first user turn only, matching get_message()'s
-    (text, video) content ordering. Later turns are text: the model is expected
-    to still have the video in context, exactly as in training.
+    Each turn goes through DataFormatter.get_user_prompt. Non-final
+    turns contain user+assistant; the final turn contains user prompt only, leaving the model
+    to generate the corrected tracks. The video is attached to the first user turn.
     """
     formatter = get_text_formatter()
-    rng = random.Random(0)          # deterministic prompt variation across runs
+    rng = random.Random(0)
     turns = raw["multi_turn_messages"]
     chat = []
     for i, turn in enumerate(turns):
@@ -284,14 +272,6 @@ def generate_predictions(llm, processor, examples, output_path, sampling_params,
 
 def _warn_if_truncated(predictions, sampling_params):
     """Warn about predictions whose <tracks> never closed.
-
-    Such a string still parses -- the evaluator scores the tracks that made it
-    out -- so the run completes and merely reports worse numbers. Two causes,
-    which the tail of the prediction tells apart: the generation budget ran out
-    (raise --max_tokens; costs the most on the densest videos), or the model
-    degenerated into repeating one coordinate row until it hit the budget
-    (a larger budget will not help). Text-only tasks emit no <tracks> at all and
-    are left alone.
     """
     unclosed = [p["example_id"] for p in predictions
                 if "<tracks" in p["prediction"]
@@ -301,6 +281,4 @@ def _warn_if_truncated(predictions, sampling_params):
     max_tokens = getattr(sampling_params, "max_tokens", None)
     log.warning(
         f"{len(unclosed)}/{len(predictions)} predictions have an unclosed <tracks>: they hit "
-        f"max_tokens={max_tokens} and will score too low. Check the tail of each -- a plausible "
-        f"final row means the budget was too small (raise --max_tokens), a repeated row means "
-        f"the model looped and a larger budget will not help. First few: {unclosed[:5]}")
+        f"max_tokens={max_tokens} and will score too low. First few: {unclosed[:5]}")

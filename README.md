@@ -15,9 +15,7 @@
 
 Video object tracking is important to various population monitoring, behavioral analysis, and wildlife management use cases in ecology. But dealing with tracks in video manually—whether annotating new tracks in video, or modifying existing/predicted tracks to make data ready for downstream analysis—still requires lots of human time and labor.
 
-<strong>
-Could a model with sufficient intelligence in both <em>natural language and spatiotemporal reasoning</em> help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame? 
-</strong>
+<strong>Could a model with sufficient intelligence in both <em>natural language and spatiotemporal reasoning</em> help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame?</strong>
 
 We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://github.com/allenai/molmo2), Ai2's open video understanding, pointing, and tracking model, on thousands of [fish tracking](https://huggingface.co/datasets/perona-lab/cfc26) correction trajectories. Molmo2Fish treats the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
@@ -40,25 +38,6 @@ We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://git
 **Can Molmo2Fish use language guidance to intelligently correct flawed predictions?** ***Sometimes***. We probe this question by comparing the corrections Molmo2Fish makes in response to a generic prompt like "Fix all mistakes" to the corrections it makes in response to a detailed prompt specifying all the mistakes. (During training, it sees both variants of the task.) Molmo2Fish is able to correct the "easiest" mistakes regardless of whether the fixes are specified, and unable to correct the "hardest" mistakes regardless of whether the fixes are specified. Only for mistakes falling into an "intermediate" range of difficulty is language guidance necessary and sufficient for Molmo2Fish to make a better correction based on language.
 
 We train Molmo2Fish on a variety of data. A **synthetic** correction set artificially applies corruptions to ground truth tracks and asks the model to correct them. A **targeted** set artificially applies corruptions and asks the model to correct only one or two mistakes. **Molmo-low** and **Molmo-high** represent correction trajectories on predictions from a low-performing (early checkpoint) and high-performing (late checkpoint) version of Molmo2, respectively. Finally, the two-stage tracking-by-detection **YOLO+SORT** pipeline produces correction trajectories used only in evaluation.
-
-In the code and on the hub, each of these is a family of datasets, one per prompt
-tier — `full` (every mistake spelled out), `vague` (the same mistakes, tersely),
-`wrong_only` (generic, but says mistakes exist), and `no_info` (generic and
-non-committal):
-
-| in the paper | dataset names |
-|---|---|
-| tracking | `cfc_hf_track` (track all fish), `cfc_hf_target` (track a referred subset) |
-| targeted | `cfc_hf_synthetic_correction_incomplete` |
-| synthetic | `cfc_hf_synthetic_correction_{full,vague,wrong_only,no_info}` |
-| Molmo-high | `cfc_hf_correction_molmo_high_{full,vague,wrong_only,no_info}` |
-| Molmo-low | `cfc_hf_correction_molmo_low_{full,vague,wrong_only,no_info}` |
-| YOLO+SORT | `cfc_hf_correction_yolo_{full,vague,wrong_only,no_info}` (validation only) |
-| text-only | `cfc_hf_text` |
-
-Append `_eval_2fps` to any of these to get its evaluation task name. The
-[hub config names](https://huggingface.co/datasets/tidalove/cfc-track-instruction)
-are the same minus the `cfc_hf_` prefix (e.g. `cfc_correction_molmo_low_full`).
 
 <img src="assets/hota_before_after_anim.gif" alt="HOTA before/after correction" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
 
@@ -165,33 +144,24 @@ Set `WANDB_PROJECT` and `WANDB_ENTITY` if you want logging, and leave them unset
 
 `OMP_NUM_THREADS` is for torch.
 
-The CFC data path has three escape hatches, all read by `olmo/data/cfc_hf_datasets.py`:
-
-- `CFC_HF_REPO` — load annotations from a different hub repo (default `tidalove/cfc-track-instruction`)
-- `CFC_STAGE_FRAMES=0` — skip fetching frames from `perona-lab/cfc26`, for when you have
-  already placed them at `$MOLMO_DATA_DIR/video_datasets/video_track/CFC/JPEGImages/{video_id}/`
-- `CFC_REQUIRE_VIDEO=0` — keep rows whose mp4 has not been encoded, instead of dropping them
-
 # Training and Evaluations
 
 ## Checkpoints
 
-We release the Molmo2Fish weights at [tidalove/Molmo2Fish](https://huggingface.co/tidalove/Molmo2Fish):
-rank 64 LoRA fine-tuning of Molmo2-8B on all CFC data, step 420. The repo holds two things —
-the HuggingFace-format weights at the root, which is what vLLM and `launch_scripts/hf_eval.py`
-consume, and a tar of the raw training checkpoint (model + optimizer state) for resuming
-fine-tuning.
+We release the Molmo2Fish weights at [tidalove/Molmo2Fish](https://huggingface.co/tidalove/Molmo2Fish). 
+The repo holds the HuggingFace-format weights, ready for evaluation by vLLM and `launch_scripts/hf_eval.py`,
+and a tar of the raw training checkpoint (model + optimizer state) for resuming fine-tuning.
 
 ```bash
-# HF format, ready to evaluate (--exclude keeps the 37GB raw tar out of it)
+# HF format, ready to evaluate
 hf download tidalove/Molmo2Fish --exclude "*.tar" --local-dir Molmo2Fish-HF/step420-hf
 
-# raw weights, to resume training from
+# raw weights
 hf download tidalove/Molmo2Fish Molmo2Fish-step420-raw.tar --local-dir .
 tar -xf Molmo2Fish-step420-raw.tar
 ```
 
-For convenience we also provide the link to the Molmo2-8B checkpoint that we trained from.
+This is the link to the Molmo2-8B checkpoint that we trained from.
 Download and untar it to use as a fine-tuning starting point:
 
 ```bash
@@ -214,8 +184,7 @@ WANDB_API_KEY=key WANDB_PROJECT=project WANDB_ENTITY=entity \
 ```
 
 `WANDB_PROJECT` and `WANDB_ENTITY` have to be in the environment: wandb is switched off
-entirely when `WANDB_PROJECT` is unset, and a `--wandb.*` override on top of that fails
-during config resolution.
+when `WANDB_PROJECT` is unset.
 
 LoRA fine-tuning on the track correction task, without wandb logging. This is the recipe the
 released Molmo2Fish checkpoint used:
@@ -226,9 +195,7 @@ torchrun --nproc-per-node=8 launch_scripts/sft.py /path/to/pretrained/model cfc_
   --save_folder=/path/to/save/folder
 ```
 
-There is one `--lora_*` flag per component, and **a component with no `--lora_*` flag is
-fully fine-tuned**, not left alone — so dropping `--lora_llm` above would LoRA-adapt the ViT
-and connector while full fine-tuning the LLM. Freeze a component explicitly to leave it out
+Freeze a component explicitly to leave it out
 of training entirely. For example, LoRA on the LLM, a fully frozen ViT, and a fully
 fine-tuned connector:
 
@@ -307,11 +274,30 @@ python launch_scripts/hf_eval.py - cfc_hf_correction_molmo_low_full_eval_2fps \
 For correction tasks the metrics include `HOTA_before` (the tracks the model was handed),
 `HOTA_after` (what it returned), and `norm_delta_HOTA`, the fraction of the available
 headroom it closed, plus a per-river breakdown and the directional net-count error `nMAE`.
-Run `python launch_scripts/hf_eval.py --help` for the full set of options (`--split`,
-`--max_examples`, `--chunk_size`, `--max_tokens`, `--max_fps`, `--gpu_memory_utilization`,
-`--num_shards`/`--shard_index`, and more).
+Run `python launch_scripts/hf_eval.py --help` for the full set of options.
 
 The original eval script (with our modifications to support the multi-turn conversation format) at `launch_scripts/eval.py` also works, but is much slower and was tested less extensively.
+
+## Evaluation subsets
+
+One eval/train dataset exists per prompt
+tier: `full` (every mistake spelled out), `vague` (the same mistakes, tersely),
+`wrong_only` (generic, but says mistakes exist), and `no_info` (generic and
+non-committal):
+
+| in the paper | dataset names |
+|---|---|
+| tracking | `cfc_hf_track` (track all fish), `cfc_hf_target` (track a referred subset) |
+| targeted | `cfc_hf_synthetic_correction_incomplete` |
+| synthetic | `cfc_hf_synthetic_correction_{full,vague,wrong_only,no_info}` |
+| Molmo-high | `cfc_hf_correction_molmo_high_{full,vague,wrong_only,no_info}` |
+| Molmo-low | `cfc_hf_correction_molmo_low_{full,vague,wrong_only,no_info}` |
+| YOLO+SORT | `cfc_hf_correction_yolo_{full,vague,wrong_only,no_info}` (validation only) |
+| text-only | `cfc_hf_text` |
+
+Append `_eval_2fps` to any of these to get its evaluation task name. The
+[hub config names](https://huggingface.co/datasets/tidalove/cfc-track-instruction)
+are the same minus the `cfc_hf_` prefix (e.g. `cfc_correction_molmo_low_full`).
 
 # Citation
 

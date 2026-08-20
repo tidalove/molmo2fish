@@ -15,7 +15,6 @@ from os.path import exists, join
 from pycocotools import mask as mask_utils
 
 from olmo.data.dataset import Dataset, VIDEO_DATA_HOME
-# Upstream-identical symbols only. Do not add CFC/LocalTrackingDataset here.
 from olmo.data.academic_video_track_datasets import (
     TRACKING_TASKS,
     _load_hf_dataset,
@@ -84,10 +83,6 @@ class CFCDatasetBase(Dataset):
         self.task = task
         self.sampling_fps = sampling_fps
         self.use_fps_sampling = use_fps_sampling
-        # Controls only whether get() attaches GT (masks/points/mask_id) to
-        # metadata, never the prompt. Defaults to "eval on anything but train",
-        # but scoring a train split is legitimate (the masks are on the hub for
-        # every split), so callers can force it — see olmo/eval/standalone_eval.py.
         self.is_eval = (split != "train") if is_eval is None else is_eval
         self.data_split = self.SPLIT_MAP[split]
         self.video_home = self._get_home(self.data_split)
@@ -183,9 +178,7 @@ class CFCDatasetBase(Dataset):
     # ── Examples ───────────────────────────────────────────────────────────
 
     def get(self, idx, rng):
-        ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
-
-        # Fall back to the row's own cadence
+        ex = dict(self.data[idx])
         sampling_fps = self.sampling_fps or ex.get('sampling_fps')
         ex['sampling_fps'] = sampling_fps  # _create_message_list reads this
 
@@ -235,16 +228,14 @@ class CFCMultiTurnBase(CFCDatasetBase):
 
     HAS_VIDEO = True
 
-    # Range regex tried first so single-frame regex doesn't eat half a range.
-    # Captures separator so "between frames N and M" stays "between Ns and Ms".
+    # Range regex for replacing frame numbers with time in prompts
     _FRAME_RANGE_RE = re.compile(
         r'\bframes?\s+(\d+)\s+(to|and|through|until)\s+(\d+)\b',
         re.I,
     )
     # Dash range accepts ASCII hyphen plus en/em dash ("frames N–M").
     _FRAME_RANGE_DASH_RE = re.compile(r'\bframes?\s+(\d+)\s*[-–—]\s*(\d+)\b', re.I)
-    # Comma list ("frames N, M, ..., and K") — needs >=1 comma so it doesn't
-    # overlap the single/range-with-"and" cases. Tried before the single regex.
+    # Comma list ("frames N, M, ..., and K")
     _FRAME_LIST_RE = re.compile(
         r'\bframes\s+\d+(?:\s*,\s*\d+)+(?:\s*,?\s*and\s+\d+)?', re.I)
     _FRAME_SINGLE_RE = re.compile(r'\bframes?\s+(\d+)\b', re.I)
@@ -304,10 +295,8 @@ class CFCMultiTurnBase(CFCDatasetBase):
         return message_list
 
     def get(self, idx, rng):
-        ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
+        ex = dict(self.data[idx])
         video_fps = ex.get("fps", self.VIDEO_FPS)
-        # Same rule as CFCDatasetBase.get: constructor value wins, row is the
-        # fallback. Correction rows always carry their own sampling_fps.
         sampling_fps = self.sampling_fps or ex.get('sampling_fps')
         ex['sampling_fps'] = sampling_fps
         message_list = self._create_message_list(ex)
