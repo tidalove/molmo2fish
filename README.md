@@ -5,6 +5,9 @@
   <h1>Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance</h1>
 </div>
 <p align="center">
+  <a href="https://arxiv.org/abs/2608.18602">
+    <img alt="Paper" src="https://img.shields.io/badge/arXiv-2608.18602-b31b1b">
+  </a>
   <a href="https://huggingface.co/tidalove/Molmo2Fish">
     <img alt="Model Checkpoint" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Model-yellow">
   </a>
@@ -15,14 +18,14 @@
 
 Video object tracking is important to various population monitoring, behavioral analysis, and wildlife management use cases in ecology. But dealing with tracks in video manually—whether annotating new tracks in video, or modifying existing/predicted tracks to make data ready for downstream analysis—still requires lots of human time and labor.
 
-<strong>Could a model with sufficient intelligence in both <em>natural language and spatiotemporal reasoning</em> help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame?</strong>
+<strong>Could a model with sufficient intelligence in both natural language and spatiotemporal reasoning help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame?</strong>
 
 We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://github.com/allenai/molmo2), Ai2's open video understanding, pointing, and tracking model, on thousands of [fish tracking](https://huggingface.co/datasets/perona-lab/cfc26) correction trajectories. Molmo2Fish treats the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
 <video src="https://github.com/user-attachments/assets/1dfb98e2-33d2-43d9-8d68-74ea858a8ea1" controls width="700"></video>
 
 <details>
-<summary><strong>More video examples</strong></summary>
+<summary><h3>More video examples</h3></summary>
 
 <video src="https://github.com/user-attachments/assets/7799836a-a614-42a7-8e4b-dbea732d8633" controls width="700"></video>
 <video src="https://github.com/user-attachments/assets/cc429865-7538-4c80-9586-f21a4abe001b" controls width="700"></video>
