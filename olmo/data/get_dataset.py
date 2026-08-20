@@ -25,10 +25,10 @@ from olmo.data.academic_video_track_datasets import (
 )
 from olmo.data.cfc_hf_datasets import (
     CFC_HF_DATASETS,  # {name: (class, kwargs)}
-    CFCTrackHF, CFCTargetedHF,
+    CFCTrackHF, CFCGuidedHF,
     CFCSyntheticCorrectionFullHF, CFCSyntheticCorrectionVagueHF,
     CFCSyntheticCorrectionWrongOnlyHF, CFCSyntheticCorrectionNoInfoHF,
-    CFCSyntheticCorrectionIncompleteHF,
+    CFCSyntheticCorrectionTargetedHF,
     CFCCorrectionMolmoHighFullHF, CFCCorrectionMolmoHighWrongOnlyHF,
     CFCCorrectionMolmoHighVagueHF, CFCCorrectionMolmoHighNoInfoHF,
     CFCCorrectionMolmoLowFullHF, CFCCorrectionMolmoLowWrongOnlyHF,

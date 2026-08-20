@@ -290,8 +290,8 @@ non-committal):
 
 | in the paper | dataset names |
 |---|---|
-| tracking | `cfc_hf_track` (track all fish), `cfc_hf_target` (track a referred subset) |
-| targeted | `cfc_hf_synthetic_correction_incomplete` |
+| tracking | `cfc_hf_track` (track all fish), `cfc_hf_guided` (track a referred subset) |
+| targeted | `cfc_hf_synthetic_correction_targeted` |
 | synthetic | `cfc_hf_synthetic_correction_{full,vague,wrong_only,no_info}` |
 | Molmo-high | `cfc_hf_correction_molmo_high_{full,vague,wrong_only,no_info}` |
 | Molmo-low | `cfc_hf_correction_molmo_low_{full,vague,wrong_only,no_info}` |

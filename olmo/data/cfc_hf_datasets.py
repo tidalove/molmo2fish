@@ -287,11 +287,11 @@ class CFCTrackHF(CFCHFMixin, CFCDatasetBase):
         return data
 
 
-class CFCTargetedHF(CFCTrackHF):
+class CFCGuidedHF(CFCTrackHF):
     """Per-query CFC tracking. Same row shape as cfc_hf_track; the hub config
     carries one example per query instead of one per video."""
-    DATASET_NAME = "cfc_hf_target"
-    HF_CONFIG = "cfc_target"
+    DATASET_NAME = "cfc_hf_guided"
+    HF_CONFIG = "cfc_guided"
 
 
 # ── Correction family (multi-turn) ─────────────────────────────────────────
@@ -357,9 +357,9 @@ class CFCSyntheticCorrectionNoInfoHF(CFCCorrectionHFBase):
     HF_CONFIG = "cfc_synthetic_correction_no_info"
 
 
-class CFCSyntheticCorrectionIncompleteHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_synthetic_correction_incomplete"
-    HF_CONFIG = "cfc_synthetic_correction_incomplete"
+class CFCSyntheticCorrectionTargetedHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_synthetic_correction_targeted"
+    HF_CONFIG = "cfc_synthetic_correction_targeted"
 
 
 class CFCCorrectionMolmoHighFullHF(CFCCorrectionHFBase):
@@ -443,12 +443,12 @@ class CFCTextHF(CFCCorrectionHFBase):
 
 CFC_HF_CLASSES = [
     CFCTrackHF,
-    CFCTargetedHF,
+    CFCGuidedHF,
     CFCSyntheticCorrectionFullHF,
     CFCSyntheticCorrectionVagueHF,
     CFCSyntheticCorrectionWrongOnlyHF,
     CFCSyntheticCorrectionNoInfoHF,
-    CFCSyntheticCorrectionIncompleteHF,
+    CFCSyntheticCorrectionTargetedHF,
     CFCCorrectionMolmoHighFullHF,
     CFCCorrectionMolmoHighWrongOnlyHF,
     CFCCorrectionMolmoHighVagueHF,
@@ -470,7 +470,7 @@ def _registry():
     out = {}
     for cls in CFC_HF_CLASSES:
         name = cls.DATASET_NAME
-        eval_name = ("cfc_hf_target_track_eval_2fps" if name == "cfc_hf_target"
+        eval_name = ("cfc_hf_guided_track_eval_2fps" if name == "cfc_hf_guided"
                      else f"{name}_eval_2fps")
         out[name] = (cls, dict(task="track", sampling_fps=2))
         out[eval_name] = (cls, dict(task="track", sampling_fps=2))

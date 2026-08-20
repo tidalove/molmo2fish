@@ -435,15 +435,15 @@ def get_training_mixture(name):
     elif name == "cfc_track":
         training_mixture = [
             ["cfc_hf_track", ["cfc_hf_track"], 0.5],
-            ["cfc_hf_target", ["cfc_hf_target"], 0.5],
+            ["cfc_hf_guided", ["cfc_hf_guided"], 0.5],
         ]
     elif name == "cfc_correction":
         training_mixture = [
             ["cfc_hf_track", ["cfc_hf_track"], 0.15],
-            ["cfc_hf_target", ["cfc_hf_target"], 0.1],
+            ["cfc_hf_guided", ["cfc_hf_guided"], 0.1],
             ["cfc_hf_text", ["cfc_hf_text"], 0.05],
             ["cfc_hf_synthetic_correction_full", ["cfc_hf_synthetic_correction_full"], 0.1],
-            ["cfc_hf_synthetic_correction_incomplete", ["cfc_hf_synthetic_correction_incomplete"], 0.1],
+            ["cfc_hf_synthetic_correction_targeted", ["cfc_hf_synthetic_correction_targeted"], 0.1],
             ["cfc_hf_synthetic_correction_wrong_only", ["cfc_hf_synthetic_correction_wrong_only"], 0.025],
             ["cfc_hf_synthetic_correction_no_info", ["cfc_hf_synthetic_correction_no_info"], 0.05],
             ["cfc_hf_synthetic_correction_vague", ["cfc_hf_synthetic_correction_vague"], 0.1],
@@ -542,7 +542,7 @@ def main():
     elif args.mixture == "cfc_track":
         loss_eval_tasks = [f"{t}:{args.val_split}" for t in [
             "cfc_hf_track",
-            "cfc_hf_target",
+            "cfc_hf_guided",
         ]]
         eval_tasks = []
     elif args.mixture == "cfc_correction":
@@ -552,7 +552,7 @@ def main():
             "cfc_hf_correction_molmo_high_no_info",
             "cfc_hf_correction_molmo_low_full",
             "cfc_hf_correction_molmo_low_no_info",
-            "cfc_hf_synthetic_correction_incomplete",
+            "cfc_hf_synthetic_correction_targeted",
         ]]
         eval_tasks = []
     elif args.mixture in CFC_HF_DATASETS:
