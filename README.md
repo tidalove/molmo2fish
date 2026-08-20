@@ -77,7 +77,7 @@ See [our paper](https://arxiv.org/abs/2608.18602) for details, ablations, a desc
   - [Fine-tuning](#fine-tuning)
   - [Evaluation](#evaluation)
     - [Install Vision Process Package](#install-vision-process-package)
-    - [Install vLLM (\>= 0.15.0)](#install-vllm--0150)
+    - [Install vLLM](#install-vllm)
     - [Convert Checkpoint to Hugging Face Format](#convert-checkpoint-to-hugging-face-format)
 
 # Overview
@@ -104,13 +104,13 @@ pip install torchcodec
 pip install -e .[all]
 ```
 
-To install dependencies including vLLM (optional but strongly recommended for evaluation), you can run the following or see [Install vLLM](#install-vllm--0150) for more details:
+To install dependencies including vLLM (optional but strongly recommended for evaluation), you can run the following or see [Install vLLM](#install-vllm) for more details:
 
 ```bash
 git clone https://github.com/tidalove/molmo2fish.git
 cd molmo2fish
 pip install uv
-uv pip install vllm --torch-backend=auto
+uv pip install "vllm>=0.15.0,<0.24" --torch-backend=auto
 pip install torchcodec
 pip install -e .[all]
 pip install --no-cache-dir "molmo-utils[torchcodec]"
@@ -255,9 +255,22 @@ Install with:
 pip install --no-cache-dir "molmo-utils[torchcodec]"
 ```
 
-### Install vLLM (>= 0.15.0)
-Molmo2 is officially supported in vLLM starting from v0.15.0.
-Please install vLLM 0.15.0 or later.
+### Install vLLM
+Molmo2 is officially supported in vLLM starting from v0.15.0, so install
+**`vllm>=0.15.0,<0.24`**.
+
+The upper bound matters. vLLM 0.24.0 moved to `transformers>=5.5.3`, and the Molmo2
+checkpoints' remote code (`processing_molmo2.py`) is written against the transformers 4.x
+`ProcessorMixin`, which tolerated arbitrary keyword arguments. transformers 5 rejects them,
+so the processor fails to construct at all:
+
+```
+TypeError: Unexpected keyword argument image_use_col_tokens.
+```
+
+which surfaces downstream as the more confusing `Cannot use apply_chat_template because this
+processor does not have a chat template`. Our evaluations were run on vLLM 0.17.0 with
+transformers 4.57.6.
 
 You can find the detailed installation guide in the [official documentation](https://docs.vllm.ai/en/latest/getting_started/installation).
 
