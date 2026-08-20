@@ -257,19 +257,7 @@ pip install --no-cache-dir "molmo-utils[torchcodec]"
 
 ### Install vLLM
 Molmo2 is officially supported in vLLM starting from v0.15.0, so install
-**`vllm>=0.15.0,<0.24`**.
-
-The upper bound matters. vLLM 0.24.0 moved to `transformers>=5.5.3`, and the Molmo2
-checkpoints' remote code (`processing_molmo2.py`) is written against the transformers 4.x
-`ProcessorMixin`, which tolerated arbitrary keyword arguments. transformers 5 rejects them,
-so the processor fails to construct at all:
-
-```
-TypeError: Unexpected keyword argument image_use_col_tokens.
-```
-
-which surfaces downstream as the more confusing `Cannot use apply_chat_template because this
-processor does not have a chat template`. Our evaluations were run on vLLM 0.17.0 with
+`vllm>=0.15.0,<0.24`. Our evaluations were run on vLLM 0.17.0 with
 transformers 4.57.6.
 
 You can find the detailed installation guide in the [official documentation](https://docs.vllm.ai/en/latest/getting_started/installation).
@@ -305,8 +293,7 @@ python launch_scripts/hf_eval.py Molmo2Fish-HF/step420-hf cfc_hf_correction_molm
 
 This will save `predictions.json` and `metrics.json` under
 `results/cfc_hf_correction_molmo_low_full_eval_2fps/validation` (override with `--save_dir`).
-Note that a second call re-runs inference from scratch unless you pass `--resume`; what it
-will not do is overwrite an existing `metrics.json` unless you pass `--overwrite`.
+A second call re-runs inference from scratch unless you pass `--resume`; overwrite an existing `metrics.json` by passing `--overwrite`.
 
 Scoring is separable from generation. To re-score a `predictions.json` you already have,
 with no GPU and no model:
@@ -319,7 +306,7 @@ python launch_scripts/hf_eval.py - cfc_hf_correction_molmo_low_full_eval_2fps \
 
 For correction tasks the metrics include `HOTA_before` (the tracks the model was handed),
 `HOTA_after` (what it returned), and `norm_delta_HOTA`, the fraction of the available
-headroom it closed — plus a per-river breakdown and the directional net-count error `nMAE`.
+headroom it closed, plus a per-river breakdown and the directional net-count error `nMAE`.
 Run `python launch_scripts/hf_eval.py --help` for the full set of options (`--split`,
 `--max_examples`, `--chunk_size`, `--max_tokens`, `--max_fps`, `--gpu_memory_utilization`,
 `--num_shards`/`--shard_index`, and more).

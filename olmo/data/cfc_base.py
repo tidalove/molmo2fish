@@ -12,6 +12,7 @@ import json
 import logging
 import re
 from os.path import exists, join
+from pycocotools import mask as mask_utils
 
 from olmo.data.dataset import Dataset, VIDEO_DATA_HOME
 # Upstream-identical symbols only. Do not add CFC/LocalTrackingDataset here.
@@ -36,11 +37,6 @@ def points_from_masks(masks, video_fps):
     Each object's per-frame point is the centroid of its mask bbox (via
     `pycocotools.mask.toBbox`); the object index is the mask dict key.
 
-    Kept here rather than imported from olmo/eval/object_tracking_utils.py (also
-    a local addition) so loading an eval-split example needs nothing outside
-    olmo/data/cfc_*.py. The two copies must stay in sync; the CFC eval metrics
-    still live in olmo/eval/.
-
     Args:
         masks: {mask_idx_str: [rle_or_None per frame]} (all lists same length).
         video_fps: frames-per-second used to set each frame's `time`.
@@ -49,7 +45,6 @@ def points_from_masks(masks, video_fps):
         [{'frame', 'time', 'points': {obj_idx: {'point': [x, y], 'occluded': False}}}],
         one entry per frame, or [] if `masks` is empty.
     """
-    from pycocotools import mask as mask_utils
     if not masks:
         return []
     n_frames = len(next(iter(masks.values())))
@@ -69,11 +64,7 @@ def points_from_masks(masks, video_fps):
 
 
 class CFCDatasetBase(Dataset):
-    """Single-turn CFC tracking dataset (point tracks over a 6 fps sonar clip).
-
-    Subclasses provide `load()`, returning rows with at least id/video/expression/
-    width/height/fps/mask_id/frame_trajectories.
-    """
+    """Single-turn CFC tracking dataset (point tracks over a 6 fps sonar clip)."""
 
     DATASET_NAME = None
     VIDEO_HOME = CFC_VIDEO_HOME
@@ -194,9 +185,7 @@ class CFCDatasetBase(Dataset):
     def get(self, idx, rng):
         ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
 
-        # Constructor value wins (e.g. 2 for eval); fall back to the row's own
-        # cadence so an example always carries an explicit sampling_fps and the
-        # prompt never has to back-derive it from the loaded video.
+        # Fall back to the row's own cadence
         sampling_fps = self.sampling_fps or ex.get('sampling_fps')
         ex['sampling_fps'] = sampling_fps  # _create_message_list reads this
 
@@ -242,12 +231,7 @@ class CFCDatasetBase(Dataset):
 
 
 class CFCMultiTurnBase(CFCDatasetBase):
-    """Multi-turn CFC correction dataset: one message per correction step.
-
-    Rows carry prompts_list / points_list (turn-aligned) instead of a single set
-    of frame trajectories. `HAS_VIDEO = False` gives the text-only variant, whose
-    examples have no video attached.
-    """
+    """Multi-turn CFC correction dataset: one message per correction step."""
 
     HAS_VIDEO = True
 
@@ -271,9 +255,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
 
         Handles single ('frame N', 'frames N'), range ('frames N to M',
         'frame N and M', 'frames N-M', 'frames N–M', 'frames N through M') and
-        comma-list ('frames N, M, and K') phrasings. Surrounding prepositions
-        (at/around/from/between) and the separators (to/and/through/until/-/–/,)
-        are preserved; only the 'frame(s)' word and the numbers are rewritten.
+        comma-list ('frames N, M, and K') phrasings.
         """
         def _secs(d):
             return f"{round(int(d.group()) / fps)}s"
@@ -358,14 +340,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
             metadata['masks'] = self._read_masks(ex['id'], "0.json")
 
             # Derive eval GT points from the masks so their object-slot order matches
-            # the masks used for validation. points_list[-1] (the source final step) is
-            # indexed by enumerate(sorted(track_ids)), which disagrees with the
-            # full-video MasksRLE slot order whenever masks are hardlinked from a
-            # differently-ordered source (real / kenai-channel corrections) — that
-            # permutation otherwise corrupts detection/HOTA. No-op where the two already
-            # agree (e.g. synthetic). Only the eval GT (metadata.points) is rebuilt;
-            # multi_turn_messages (model input) and initial_points (step-0 start) are
-            # left untouched.
+            # the masks used for validation.
             if metadata['masks']:
                 metadata['points'] = points_from_masks(metadata['masks'], video_fps)
 

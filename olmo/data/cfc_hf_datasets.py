@@ -466,8 +466,8 @@ class CFCCorrectionYoloNoInfoHF(CFCCorrectionHFBase):
 class CFCTextHF(CFCCorrectionHFBase):
     DATASET_NAME = "cfc_hf_text"
     HF_CONFIG = "cfc_text"
-    NEEDS_VIDEO = False  # text-only; no video input, no masks on the hub
-    HAS_VIDEO = False    # examples carry no video path
+    NEEDS_VIDEO = False
+    HAS_VIDEO = False 
 
 
 CFC_HF_CLASSES = [
@@ -495,14 +495,7 @@ CFC_HF_CLASSES = [
 
 
 def _registry():
-    """{registered name: (class, kwargs)} for get_dataset_by_name.
-
-    Every dataset gets a plain name and an `_eval_2fps` name. Both pin
-    sampling_fps=2: the hub annotations only exist at 2 fps (ANNOTATION_FPS), so
-    every example carries an explicit cadence and the prompt fps never has to be
-    back-derived from whatever the frame sampler happened to pick. The two names
-    differ only in which one eval_utils.get_evaluator recognizes as an eval task.
-    """
+    """{registered name: (class, kwargs)} for get_dataset_by_name.    """
     out = {}
     for cls in CFC_HF_CLASSES:
         name = cls.DATASET_NAME
@@ -514,10 +507,6 @@ def _registry():
 
 
 CFC_HF_DATASETS = _registry()
-
-# Evaluator dispatch, by dataset class rather than by name shape — see
-# olmo/eval/eval_utils.py:get_evaluator. Correction datasets are the multi-turn
-# ones, and they are the only ones with a step-0 track to compare against.
 CFC_HF_TASKS = frozenset(CFC_HF_DATASETS)
 CFC_HF_CORRECTION_TASKS = frozenset(
     name for name, (cls, _) in CFC_HF_DATASETS.items()
