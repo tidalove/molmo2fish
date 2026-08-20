@@ -658,6 +658,39 @@ def apply_keyword_prompt(prompts, example, rng, keywords=None, dbg=False):
     return apply_keywords(prompt, example, keywords)
 
 
+def build_prompt_for_inference(message: dict) -> str:
+    """Build inference prompt from a message dict (e.g., message_list[0]).
+
+    Handles style-based template selection, keyword substitution,
+    prepend field, and question override. Single source of truth
+    for inference prompt construction.
+    """
+    style = message.get('style')
+
+    if 'question' in message and message['question'] is not None:
+        return message['question']
+
+    if not style or style not in GENERAL_PROMPTS_V1:
+        raise ValueError(f"Cannot build prompt: unknown style '{style}'")
+
+    prompt_keywords = {}
+    if 'label' in message:
+        prompt_keywords['label'] = message['label']
+    sampling_fps = message.get('sampling_fps')
+    if sampling_fps and sampling_fps > 0:
+        prompt_keywords['fps'] = str(int(sampling_fps))
+    if 'input_points' in message:
+        prompt_keywords['input_points'] = message['input_points']
+
+    prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1[style], prompt_keywords, None, dbg=True)
+
+    prepend = message.get('prepend')
+    if prepend is not None:
+        prompt = prepend + prompt
+
+    return prompt
+
+
 DEMO_STYLES = [
     "point_count",
     "pointing",
