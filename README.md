@@ -108,6 +108,17 @@ pip install -e .[all]
 own: it has some complex dependencies that can break when resolved together with everything
 else in `install -e .[all]`.
 
+You also need **`ffmpeg` on your `PATH`, built with libx264**. It is not a pip dependency:
+`scripts/download_datasets.py` shells out to the `ffmpeg` binary to encode the CFC clips into
+mp4s, so a missing one only shows up after the frames have already downloaded. Check with:
+
+```bash
+ffmpeg -version && ffmpeg -hide_banner -encoders | grep libx264
+```
+
+Nothing here is version-sensitive — any reasonably recent build should work. The released
+videos were encoded with ffmpeg 4.4.2, the Ubuntu 22.04 system package.
+
 
 ## Downloading Data
 
