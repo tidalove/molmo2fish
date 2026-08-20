@@ -15,9 +15,9 @@
 
 Video object tracking is important to various population monitoring, behavioral analysis, and wildlife management use cases in ecology. But dealing with tracks in video manually—whether annotating new tracks in video, or modifying existing/predicted tracks to make data ready for downstream analysis—still requires lots of human time and labor.
 
-<h3>
+<strong>
 Could a model with sufficient intelligence in both <em>natural language and spatiotemporal reasoning</em> help make targeted edits to tracks in video, leveraging the user's domain knowledge without the tedious process of manually annotating every frame? 
-</h3>
+</strong>
 
 We trained Molmo2Fish to probe this question by fine-tuning [Molmo2](https://github.com/allenai/molmo2), Ai2's open video understanding, pointing, and tracking model, on thousands of [fish tracking](https://huggingface.co/datasets/perona-lab/cfc26) correction trajectories. Molmo2Fish treats the track correction task as a conversation in which it incorporates the user's feedback as natural language.
 
@@ -64,7 +64,7 @@ are the same minus the `cfc_hf_` prefix (e.g. `cfc_correction_molmo_low_full`).
 
 Each point here represents one correction trajectory: one pre-correction set of tracks on a video (whether synthetically corrupted, or produced via inference with Molmo or YOLO), whose track accuracy vs. ground truth is on the x axis; and Molmo2Fish's output, or the post-correction tracks, whose track accuracy is on the y axis. (Only the "targeted" evaluation has a different ground truth from the rest, according to the selected mistakes the model was asked to make, which is why a generic "fix all mistakes" prompt *degrades* performance on the "targeted" pre-correction baseline.)
 
-See [our paper]() for details, ablations, a description of the data generation pipeline, more correction examples, and more experiments. The rest of this README is focused on our code.
+See [our paper](https://arxiv.org/abs/2608.18602) for details, ablations, a description of the data generation pipeline, more correction examples, and more experiments. The rest of this README is focused on our code.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -82,7 +82,7 @@ See [our paper]() for details, ablations, a description of the data generation p
 
 # Overview
 
-This repository is an extension of Ai2's open vision language model, Molmo2, to the tasks of fish tracking and track correction. It preserves all the functionality of Ai2's original Molmo2 release. Our new contributions, described in [our paper]() and implemented in this repo, are:
+This repository is an extension of Ai2's open vision language model, Molmo2, to the tasks of fish tracking and track correction. It preserves all the functionality of Ai2's original Molmo2 release. Our new contributions, described in [our paper](https://arxiv.org/abs/2608.18602) and implemented in this repo, are:
 
 - LoRA fine-tuning
 - Training and evaluation on track correction tasks
@@ -302,9 +302,13 @@ The original eval script (with our modifications to support the multi-turn conve
 # Citation
 
 ```
-@article{molmo2fish,
-    title={Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance},
-    author={Kai van Brunt and Justin Kay and Sara Beery},
-    year={2026}
+@misc{molmo2fish,
+      title={Teach a Molmo2Fish: Towards interactive fish tracking with natural language guidance}, 
+      author={Kai Van Brunt and Justin Kay and Sara Beery},
+      year={2026},
+      eprint={2608.18602},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2608.18602}, 
 }
 ```
