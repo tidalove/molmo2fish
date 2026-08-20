@@ -1,3 +1,4 @@
+from olmo.data.cfc_hf_datasets import CFC_HF_CORRECTION_TASKS, CFC_HF_TASKS
 from olmo.data.data_loader import DataLoaderConfig
 from olmo.eval.inf_evaluator import EvaluatorConfig, InfDatasetEvaluatorConfig
 from olmo.eval.loss_evaluator import LossDatasetEvaluatorConfig
@@ -149,6 +150,13 @@ def get_evaluator(name) -> EvaluatorConfig:
         ]
     ):
         return EvaluatorConfig(video_object_tracking_eval=name)
+    # CFC: dispatch off the registry, so which evaluator a task gets follows from
+    # its dataset class (multi-turn => correction) rather than from the shape of
+    # its name. Both branches must precede the generic "track_eval" rule below.
+    elif name in CFC_HF_CORRECTION_TASKS:
+        return EvaluatorConfig(video_track_correction_eval=True)
+    elif name in CFC_HF_TASKS:
+        return EvaluatorConfig(cfc_track_eval=name)
     elif any(task in name for task in ["track_eval"]):
         return EvaluatorConfig(video_object_tracking_eval="point_track_per_frame")
     elif any(task in name for task in ["tap_davis"]):

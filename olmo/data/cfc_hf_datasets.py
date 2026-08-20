@@ -1,12 +1,11 @@
 """CFC datasets backed by the HuggingFace release instead of local source jsons.
 
-Loads the hub repo built by scripts/build_cfc_hf_dataset.py (one config per
-dataset, train/validation splits, 2 fps annotations over 6 fps videos, inline
-RLE masks). Each class supplies load() plus the download plumbing on top of the
-standalone bases in olmo/data/cfc_base.py, so this path shares no CFC code with
-academic_video_track_datasets.py and keeps working against an upstream copy of
-that file — see the clean-repo section of docs/cfc_hf_dataset.md. The local
-cfc_* datasets there are unaffected counterparts, not parents.
+Loads tidalove/cfc-track-instruction (one config per dataset, train/validation
+splits, 2 fps annotations over 6 fps videos, inline RLE masks). Each class
+supplies load() plus the download plumbing on top of the standalone bases in
+olmo/data/cfc_base.py, so this path shares no CFC code with
+academic_video_track_datasets.py and depends only on symbols that are unchanged
+from upstream Molmo2.
 
 download() caches the hub annotations, rehydrates MasksRLE/ files
 (write-if-missing), stages frames into
@@ -14,8 +13,8 @@ $MOLMO_DATA_DIR/video_datasets/video_track/CFC/{SourceFrames,JPEGImages}/ from
 the raw-frame release perona-lab/cfc26 (see olmo/data/cfc_frames.py; set
 CFC_STAGE_FRAMES=0 to skip when frames are already placed by hand) and encodes
 videos/{video_id}.mp4 with ffmpeg. All splits are staged in one pass over the
-river tarballs; staging every config at once is cheaper still, and doing so is
-what scripts/download_cfc_frames.py is for.
+river tarballs; staging every config at once is cheaper still, which is what
+`python -m scripts.download_datasets cfc` does.
 
 The encoded videos define the usable rows: load() drops any row whose mp4 is not
 on disk (CFC_REQUIRE_VIDEO=0 opts out) and download() reports what will be
@@ -55,8 +54,6 @@ class CFCHFMixin:
     ANNOTATION_FPS = 2
     NEEDS_VIDEO = True
     SPLIT_MAP = {
-        "train-v2": "train",
-        "validation-v2": "validation",
         "train": "train",
         "validation": "validation",
     }
@@ -153,7 +150,8 @@ class CFCHFMixin:
             return
         splits = "+".join(sorted(rows_by_split))
         log.info(f"[{cls.DATASET_NAME}] {len(videos)} videos need frames ({splits}); "
-                 f"staging all configs at once is cheaper: scripts/download_cfc_frames.py")
+                 f"staging all configs at once is cheaper: "
+                 f"python -m scripts.download_datasets cfc")
         # JPEGImages/ and SourceFrames/ are shared by every split, so any split's
         # paths are the right ones (see CFCDatasetBase._get_frames_dir)
         any_split = next(iter(rows_by_split))
@@ -393,73 +391,73 @@ class CFCSyntheticCorrectionIncompleteHF(CFCCorrectionHFBase):
     HF_CONFIG = "cfc_synthetic_correction_incomplete"
 
 
-class CFCCorrectionRealFullEasyHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_full_easy"
-    HF_CONFIG = "cfc_correction_real_full_easy"
+class CFCCorrectionMolmoHighFullHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_high_full"
+    HF_CONFIG = "cfc_correction_molmo_high_full"
 
 
-class CFCCorrectionRealWrongOnlyEasyHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_wrong_only_easy"
-    HF_CONFIG = "cfc_correction_real_wrong_only_easy"
-    # this tier has no val-easy jsonl -> no validation split on the hub
-    SPLIT_MAP = {"train-v2": "train", "train": "train"}
+class CFCCorrectionMolmoHighWrongOnlyHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_high_wrong_only"
+    HF_CONFIG = "cfc_correction_molmo_high_wrong_only"
+    # this tier has no validation split on the hub
+    SPLIT_MAP = {"train": "train"}
 
 
-class CFCCorrectionRealVagueEasyHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_vague_easy"
-    HF_CONFIG = "cfc_correction_real_vague_easy"
+class CFCCorrectionMolmoHighVagueHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_high_vague"
+    HF_CONFIG = "cfc_correction_molmo_high_vague"
 
 
-class CFCCorrectionRealNoInfoEasyHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_no_info_easy"
-    HF_CONFIG = "cfc_correction_real_no_info_easy"
+class CFCCorrectionMolmoHighNoInfoHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_high_no_info"
+    HF_CONFIG = "cfc_correction_molmo_high_no_info"
 
 
-class CFCCorrectionRealFullHardHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_full_hard"
-    HF_CONFIG = "cfc_correction_real_full_hard"
+class CFCCorrectionMolmoLowFullHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_low_full"
+    HF_CONFIG = "cfc_correction_molmo_low_full"
 
 
-class CFCCorrectionRealWrongOnlyHardHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_wrong_only_hard"
-    HF_CONFIG = "cfc_correction_real_wrong_only_hard"
+class CFCCorrectionMolmoLowWrongOnlyHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_low_wrong_only"
+    HF_CONFIG = "cfc_correction_molmo_low_wrong_only"
 
 
-class CFCCorrectionRealVagueHardHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_vague_hard"
-    HF_CONFIG = "cfc_correction_real_vague_hard"
+class CFCCorrectionMolmoLowVagueHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_low_vague"
+    HF_CONFIG = "cfc_correction_molmo_low_vague"
 
 
-class CFCCorrectionRealNoInfoHardHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_no_info_hard"
-    HF_CONFIG = "cfc_correction_real_no_info_hard"
+class CFCCorrectionMolmoLowNoInfoHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_molmo_low_no_info"
+    HF_CONFIG = "cfc_correction_molmo_low_no_info"
 
 
 # YOLO-SORT step-0 tracks vs COCO GT — validation only
-_YOLO_SPLIT_MAP = {"validation-v2": "validation", "validation": "validation"}
+_YOLO_SPLIT_MAP = {"validation": "validation"}
 
 
-class CFCCorrectionRealYoloFullHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_yolo_full"
-    HF_CONFIG = "cfc_correction_real_yolo_full"
+class CFCCorrectionYoloFullHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_yolo_full"
+    HF_CONFIG = "cfc_correction_yolo_full"
     SPLIT_MAP = _YOLO_SPLIT_MAP
 
 
-class CFCCorrectionRealYoloWrongOnlyHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_yolo_wrong_only"
-    HF_CONFIG = "cfc_correction_real_yolo_wrong_only"
+class CFCCorrectionYoloWrongOnlyHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_yolo_wrong_only"
+    HF_CONFIG = "cfc_correction_yolo_wrong_only"
     SPLIT_MAP = _YOLO_SPLIT_MAP
 
 
-class CFCCorrectionRealYoloVagueHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_yolo_vague"
-    HF_CONFIG = "cfc_correction_real_yolo_vague"
+class CFCCorrectionYoloVagueHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_yolo_vague"
+    HF_CONFIG = "cfc_correction_yolo_vague"
     SPLIT_MAP = _YOLO_SPLIT_MAP
 
 
-class CFCCorrectionRealYoloNoInfoHF(CFCCorrectionHFBase):
-    DATASET_NAME = "cfc_hf_correction_real_yolo_no_info"
-    HF_CONFIG = "cfc_correction_real_yolo_no_info"
+class CFCCorrectionYoloNoInfoHF(CFCCorrectionHFBase):
+    DATASET_NAME = "cfc_hf_correction_yolo_no_info"
+    HF_CONFIG = "cfc_correction_yolo_no_info"
     SPLIT_MAP = _YOLO_SPLIT_MAP
 
 
@@ -468,8 +466,8 @@ class CFCCorrectionRealYoloNoInfoHF(CFCCorrectionHFBase):
 class CFCTextHF(CFCCorrectionHFBase):
     DATASET_NAME = "cfc_hf_text"
     HF_CONFIG = "cfc_text"
-    NEEDS_VIDEO = False  # text-only; no video input, no masks on the hub
-    HAS_VIDEO = False    # examples carry no video path
+    NEEDS_VIDEO = False
+    HAS_VIDEO = False 
 
 
 CFC_HF_CLASSES = [
@@ -480,40 +478,36 @@ CFC_HF_CLASSES = [
     CFCSyntheticCorrectionWrongOnlyHF,
     CFCSyntheticCorrectionNoInfoHF,
     CFCSyntheticCorrectionIncompleteHF,
-    CFCCorrectionRealFullEasyHF,
-    CFCCorrectionRealWrongOnlyEasyHF,
-    CFCCorrectionRealVagueEasyHF,
-    CFCCorrectionRealNoInfoEasyHF,
-    CFCCorrectionRealFullHardHF,
-    CFCCorrectionRealWrongOnlyHardHF,
-    CFCCorrectionRealVagueHardHF,
-    CFCCorrectionRealNoInfoHardHF,
-    CFCCorrectionRealYoloFullHF,
-    CFCCorrectionRealYoloWrongOnlyHF,
-    CFCCorrectionRealYoloVagueHF,
-    CFCCorrectionRealYoloNoInfoHF,
+    CFCCorrectionMolmoHighFullHF,
+    CFCCorrectionMolmoHighWrongOnlyHF,
+    CFCCorrectionMolmoHighVagueHF,
+    CFCCorrectionMolmoHighNoInfoHF,
+    CFCCorrectionMolmoLowFullHF,
+    CFCCorrectionMolmoLowWrongOnlyHF,
+    CFCCorrectionMolmoLowVagueHF,
+    CFCCorrectionMolmoLowNoInfoHF,
+    CFCCorrectionYoloFullHF,
+    CFCCorrectionYoloWrongOnlyHF,
+    CFCCorrectionYoloVagueHF,
+    CFCCorrectionYoloNoInfoHF,
     CFCTextHF,
 ]
 
 
 def _registry():
-    """{registered name: (class, kwargs)} for get_dataset_by_name.
-
-    Every dataset gets a plain name and an `_eval_2fps` name; the suffix is what
-    olmo/eval/eval_utils.py dispatches the CFC evaluators on. cfc_hf_target is
-    the one dataset whose plain name also samples at 2 fps.
-    """
+    """{registered name: (class, kwargs)} for get_dataset_by_name.    """
     out = {}
     for cls in CFC_HF_CLASSES:
         name = cls.DATASET_NAME
         eval_name = ("cfc_hf_target_track_eval_2fps" if name == "cfc_hf_target"
                      else f"{name}_eval_2fps")
-        plain_kwargs = dict(task="track")
-        if name == "cfc_hf_target":
-            plain_kwargs["sampling_fps"] = 2
-        out[name] = (cls, plain_kwargs)
+        out[name] = (cls, dict(task="track", sampling_fps=2))
         out[eval_name] = (cls, dict(task="track", sampling_fps=2))
     return out
 
 
 CFC_HF_DATASETS = _registry()
+CFC_HF_TASKS = frozenset(CFC_HF_DATASETS)
+CFC_HF_CORRECTION_TASKS = frozenset(
+    name for name, (cls, _) in CFC_HF_DATASETS.items()
+    if issubclass(cls, CFCMultiTurnBase))

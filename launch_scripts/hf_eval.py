@@ -144,9 +144,6 @@ def main():
 
     if args.no_eval:
         return
-
-    # vLLM leaves a process group up; torchmetrics would then try to NCCL-sync
-    # CPU tensors during the reduction below.
     import torch.distributed as dist
     if dist.is_initialized():
         dist.destroy_process_group()

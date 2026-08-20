@@ -2202,6 +2202,41 @@ class VixMoCaptionEval(Evaluator):
 
         return out
 
+def _count_directional_tracks(tracks, width):
+    """Count left (right->left) and right (left->right) tracks.
+
+    tracks: list of per-frame dicts:
+        {'frame': int, 'time': ..., 'points': {obj_id: {'point': [x, y], 'occluded': bool}}}
+    A track (one obj_id) is classified solely by its first and last point across all frames it
+    appears in (occluded points included). Tracks starting and ending on the same half are skipped.
+    Returns (left_count, right_count).
+    """
+    mid = width / 2.0
+    # obj_id -> list of (frame_index, x)
+    by_obj = defaultdict(list)
+    for frame_entry in tracks:
+        frame_idx = frame_entry['frame']
+        for obj_id, pt in frame_entry['points'].items():
+            x = pt['point'][0]
+            by_obj[obj_id].append((frame_idx, x))
+
+    left_count = 0
+    right_count = 0
+    for obj_id, samples in by_obj.items():
+        samples.sort(key=lambda s: s[0])
+        first_x = samples[0][1]
+        last_x = samples[-1][1]
+        first_left = first_x < mid
+        last_left = last_x < mid
+        if first_left == last_left:
+            continue  # same half -> not counted
+        if last_left:        # right -> left
+            left_count += 1
+        else:                # left -> right
+            right_count += 1
+    return left_count, right_count
+
+
 class VideoObjectTrackingEval(Evaluator):
     """
     Evaluator for video point tracking tasks using mask-based F1 validation.
@@ -2222,6 +2257,80 @@ class VideoObjectTrackingEval(Evaluator):
     def __init__(self, n_to_log=None):
         self.n_to_log = n_to_log
 
+    @staticmethod
+    def _frame_size(metadata):
+        if "image_size" in metadata:
+            width, height = metadata["image_size"]
+        else:
+            width, height = metadata["w"], metadata["h"]
+        return width, height
+
+    @staticmethod
+    def _at_pred_cadence(tracks, metadata):
+        """Subsample a track list to the cadence predictions are emitted at.
+
+        Predictions come out at sampling_fps stride; GT (and any other track
+        stored at native cadence, like the pre-correction tracks in
+        CFCTrackCorrectionEval) is built at the native video_fps, so every
+        unsampled frame would otherwise count against the match. Both sides go
+        through here so they can never drift apart.
+        """
+        video_fps = metadata['video_fps']
+        sampling_fps = metadata.get('sampling_fps')
+        if (sampling_fps and sampling_fps > 0 and video_fps > 0
+                and sampling_fps < video_fps
+                and video_fps % sampling_fps == 0):
+            stride = int(round(video_fps / sampling_fps))
+            tracks = [t for t in tracks if t['frame'] % stride == 0]
+        return tracks
+
+    @classmethod
+    def _gt_at_pred_cadence(cls, metadata):
+        return cls._at_pred_cadence(metadata['points'], metadata)
+
+    def _eval_video(self, metadata, pred_seq, vocab):
+        """Evaluate a single video. Returns (video_metrics, pred_tracks, gt_tracks, width)."""
+        width, height = self._frame_size(metadata)
+
+        # Get ground truth
+        # Ex: [{'frame': 0, 'time': '00:00.00', 'points': {0: {'point': [1038.0, 377.0], 'occluded': False}}}]
+        gt_tracks = self._gt_at_pred_cadence(metadata)
+        gt_masks = metadata['masks'] # Ex: {'mask_id': [mask_list per frame], ...}
+
+        # Decode prediction to match GT format
+        video_fps = metadata['video_fps'] # Used for converting time to frame index
+
+        if isinstance(pred_seq, list):
+            # Pre-parsed points (e.g. MolmoPoint): [[obj_id, time_sec, x, y], ...]
+            from collections import defaultdict as _defaultdict
+            frames_by_time = _defaultdict(dict)
+            for obj_id, t, x, y in pred_seq:
+                frame = round(t * video_fps)
+                frames_by_time[(frame, t)][int(obj_id)] = {'point': [x, y], 'occluded': False}
+            pred_tracks = [
+                {'frame': f, 'time': t, 'points': pts}
+                for (f, t), pts in sorted(frames_by_time.items())
+            ]
+        else:
+            if isinstance(pred_seq, str):
+                pred = pred_seq
+            else:
+                pred = vocab.decode(pred_seq[pred_seq >= 0]).strip()
+            pred_tracks = extract_tracks(
+                pred, width, height, video_fps,
+                format='video_point_track_per_frame'
+            )
+
+        # Evaluate video point tracking by checking if it's in mask.
+        video_metrics = evaluate_video_object_tracking(
+            pred_tracks,
+            gt_tracks,
+            gt_masks,
+            height,
+            width,
+        )
+        return video_metrics, pred_tracks, gt_tracks, width
+
     def __call__(self, metadatas, predictions, tokenizer, step=None):
         new_tokens = predictions["predictions"]
         vocab = tokenizer
@@ -2234,40 +2343,18 @@ class VideoObjectTrackingEval(Evaluator):
         for ex_ix, pred_seq in enumerate(new_tokens):
             metadata = metadatas[ex_ix]
             example_id = metadata['example_id']
-            if "image_size" in metadata:
-                width, height = metadata["image_size"]
-            else:
-                width, height = metadata["w"], metadata["h"]
 
-            # Get ground truth
-            # Ex: [{'frame': 0, 'time': '00:00.00', 'points': {0: {'point': [1038.0, 377.0], 'occluded': False}}}]
-            gt_tracks = metadata['points']
-            gt_masks = metadata['masks'] # Ex: {'mask_id': [mask_list per frame], ...}
+            video_metrics, pred_tracks, gt_tracks, width = self._eval_video(
+                metadata, pred_seq, vocab)
 
-            # Decode prediction to match GT format
-            if isinstance(pred_seq, str):
-                pred = pred_seq
-            else:
-                pred = vocab.decode(pred_seq[pred_seq >= 0]).strip()
-            video_fps = metadata['video_fps'] # Used for converting time to frame index
-            pred_tracks = extract_tracks(
-                pred, width, height, video_fps,
-                format='video_point_track_per_frame'
-            )
-
-            # try:
-            # Evaluate video point tracking by checking if it's in mask.
-            video_metrics = evaluate_video_object_tracking(
-                pred_tracks,
-                gt_tracks,
-                gt_masks,
-                height,
-                width
-            )
             # Add to score lists
             scores["precision"].append(video_metrics['precision'])
             scores["recall"].append(video_metrics['recall'])
             scores["f1"].append(video_metrics['f1'])
+
+            scores["coco_precision"].append(video_metrics['coco_precision'])
+            scores["coco_recall"].append(video_metrics['coco_recall'])
+            scores["coco_f1"].append(video_metrics['coco_f1'])
 
             # hota metrics
             scores['DetA'].append(video_metrics['DetA'])
@@ -2280,13 +2367,12 @@ class VideoObjectTrackingEval(Evaluator):
                 scores[f'precision_{category}'].append(video_metrics['precision'])
                 scores[f'recall_{category}'].append(video_metrics['recall'])
                 scores[f'f1_{category}'].append(video_metrics['f1'])
+                scores[f'coco_precision_{category}'].append(video_metrics['coco_precision'])
+                scores[f'coco_recall_{category}'].append(video_metrics['coco_recall'])
+                scores[f'coco_f1_{category}'].append(video_metrics['coco_f1'])
                 scores[f'DetA_{category}'].append(video_metrics['DetA'])
                 scores[f'AssA_{category}'].append(video_metrics['AssA'])
                 scores[f'HOTA_{category}'].append(video_metrics['HOTA'])
-
-            # except Exception as e:
-            #     failed_videos.append((example_id, str(e)))
-            #     log.warning(f"Error evaluating {example_id}: {e}")
 
         # Compute aggregated metrics
         out = {}
@@ -2305,6 +2391,176 @@ class VideoObjectTrackingEval(Evaluator):
             )
 
         return out
+
+
+CFC_RIVERS = [("kenai", "Left"), ("rightbank", "Right"), ("elwha", "Elwha"),
+              ("nusagak", "Nusagak"), ("channel", "Channel")]
+
+
+def _cfc_river(name):
+    """Map a CFC clip/video name to a river key by substring, or None if no match."""
+    for river, token in CFC_RIVERS:
+        if token in name:
+            return river
+    return None
+
+
+class CFCVideoTrackingEval(VideoObjectTrackingEval):
+    """Tracking evaluator for the CFC (Caltech Fish Counting) dataset.
+
+    Computes the same metrics as VideoObjectTrackingEval, plus the directional counting metric
+    (nMAE) and a per-river breakdown (kenai/rightbank/elwha/nusagak) of
+    {coco_precision, coco_recall, coco_f1, DetA, AssA, HOTA, nMAE}.
+
+    nMAE is a ratio of two global sums (numerator = sum of |net_pred - net_gt|, denominator = sum of
+    gt_left + gt_right); the components are emitted as SumMetrics and divided in InfEvaluator after
+    the distributed reduction. Per-river keys are always emitted for all four rivers (empty rivers
+    contribute zero weight) so every rank returns an identical key set, which the per-key
+    .compute() sync in InfEvaluator requires.
+    """
+
+    # Per-river metrics aggregated by mean across videos.
+    _RIVER_MEAN_KEYS = ["coco_precision", "coco_recall", "coco_f1", "DetA", "AssA", "HOTA"]
+
+    def _extra_scores(self, metadata, video_metrics, scores):
+        """Hook for per-example metrics beyond the standard set. See
+        CFCTrackCorrectionEval, which uses it for the before/after comparison."""
+
+    def __call__(self, metadatas, predictions, tokenizer, step=None):
+        new_tokens = predictions["predictions"]
+        vocab = tokenizer
+
+        scores = defaultdict(list)
+        failed_videos = []
+
+        nmae_num = []  # per-video |net_pred - net_gt|
+        nmae_den = []  # per-video (gt_left + gt_right)
+        # Per-river accumulators
+        river_means = {r: defaultdict(list) for r, _ in CFC_RIVERS}
+        river_nmae_num = {r: [] for r, _ in CFC_RIVERS}
+        river_nmae_den = {r: [] for r, _ in CFC_RIVERS}
+        n_unmatched = 0
+
+        for ex_ix, pred_seq in enumerate(new_tokens):
+            metadata = metadatas[ex_ix]
+            example_id = metadata['example_id']
+
+            video_metrics, pred_tracks, gt_tracks, width = self._eval_video(
+                metadata, pred_seq, vocab)
+
+            # Add to score lists
+            scores["precision"].append(video_metrics['precision'])
+            scores["recall"].append(video_metrics['recall'])
+            scores["f1"].append(video_metrics['f1'])
+
+            scores["coco_precision"].append(video_metrics['coco_precision'])
+            scores["coco_recall"].append(video_metrics['coco_recall'])
+            scores["coco_f1"].append(video_metrics['coco_f1'])
+
+            # hota metrics
+            scores['DetA'].append(video_metrics['DetA'])
+            scores['AssA'].append(video_metrics['AssA'])
+            scores['HOTA'].append(video_metrics['HOTA'])
+
+            self._extra_scores(metadata, video_metrics, scores)
+
+            # Directional net-count error (nMAE) components
+            pred_left, pred_right = _count_directional_tracks(pred_tracks, width)
+            gt_left, gt_right = _count_directional_tracks(gt_tracks, width)
+            net_pred = pred_left - pred_right
+            net_gt = gt_left - gt_right
+            vid_num = abs(net_pred - net_gt)
+            vid_den = gt_left + gt_right
+            nmae_num.append(vid_num)
+            nmae_den.append(vid_den)
+
+            # Per-river breakdown (overall metrics still include unmatched videos)
+            river = _cfc_river(str(example_id))
+            if river is None:
+                n_unmatched += 1
+            else:
+                for k in self._RIVER_MEAN_KEYS:
+                    river_means[river][k].append(video_metrics[k])
+                river_nmae_num[river].append(vid_num)
+                river_nmae_den[river].append(vid_den)
+
+        if n_unmatched:
+            log.warning(f"CFCVideoTrackingEval: {n_unmatched} videos did not match any river")
+
+        # Compute aggregated metrics
+        out = {}
+        for k, v in scores.items():
+            out[k] = mean_metric(v)
+
+        # Overall nMAE components (ratio computed in InfEvaluator).
+        out["nMAE_numerator"] = sum_metric(nmae_num)
+        out["nMAE_denominator"] = sum_metric(nmae_den)
+
+        # Per-river metrics. Always emit all rivers so the key set is identical across ranks.
+        for river, _ in CFC_RIVERS:
+            for k in self._RIVER_MEAN_KEYS:
+                out[f"{k}_{river}"] = mean_metric(river_means[river][k])
+            out[f"nMAE_numerator_{river}"] = sum_metric(river_nmae_num[river])
+            out[f"nMAE_denominator_{river}"] = sum_metric(river_nmae_den[river])
+
+        if failed_videos:
+            log.warning(f"Failed to evaluate {len(failed_videos)} videos: {[x[0] for x in failed_videos[:5]]}")
+
+        # Add visualization if requested
+        if self.n_to_log:
+            per_example_scores = [{k: scores[k][i] if i < len(scores[k]) else 0.0
+                                 for k in scores} for i in range(len(new_tokens))]
+            out["predictions"] = gather_examples_as_html(
+                self.n_to_log, vocab, metadatas, predictions, per_example_scores
+            )
+
+        return out
+
+
+class CFCTrackCorrectionEval(CFCVideoTrackingEval):
+    """Evaluator for the CFC multi-turn *correction* task.
+
+    The model is shown a set of pre-correction tracks and a natural-language
+    correction, and answers with a repaired set of tracks. Scoring the answer
+    alone is not the whole story — what matters is how much it improved on what
+    it was given — so on top of every CFCVideoTrackingEval metric this emits:
+
+        HOTA_before      HOTA of the step-0 tracks the prompt carried
+        HOTA_after       HOTA of the model's answer (same value as HOTA)
+        norm_delta_HOTA  (after - before) / (1 - before), i.e. the fraction of
+                         the available headroom that was actually closed
+
+    The "before" tracks come from metadata['initial_points'], which the dataset
+    fills in from turn 0 of the trajectory (olmo/data/cfc_base.py). They are
+    scored against exactly the same GT masks, at exactly the same cadence, as
+    the prediction — nothing is re-parsed out of the rendered prompt and no
+    external baseline file is involved.
+
+    norm_delta_HOTA is undefined when the pre-correction tracks are already
+    perfect (before >= 1); those examples are left out of that mean only, and
+    still contribute to HOTA_before/HOTA_after.
+    """
+
+    def _extra_scores(self, metadata, video_metrics, scores):
+        initial = metadata.get('initial_points')
+        if initial is None:
+            return
+        width, height = self._frame_size(metadata)
+        # initial_points is stored at native cadence; the prediction is not. Put
+        # both sides on the prediction's cadence or the comparison is unfair to
+        # whichever one carries the extra frames.
+        before = evaluate_video_object_tracking(
+            self._at_pred_cadence(initial, metadata),
+            self._gt_at_pred_cadence(metadata),
+            metadata['masks'],
+            height,
+            width,
+        )['HOTA']
+        after = video_metrics['HOTA']
+        scores['HOTA_before'].append(before)
+        scores['HOTA_after'].append(after)
+        if before < 1.0:
+            scores['norm_delta_HOTA'].append((after - before) / (1.0 - before))
 
 
 class Dream1KCaptionEval(Evaluator):

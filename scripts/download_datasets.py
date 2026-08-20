@@ -13,8 +13,15 @@ from olmo.data.cfc_hf_datasets import CFC_HF_CLASSES
 from olmo.data.get_dataset import get_all_dataset_classes, get_dataset_class_by_name
 from olmo.util import prepare_cli_environment
 
+# The CFC track-instruction release: annotations + masks from
+# tidalove/cfc-track-instruction, frames from perona-lab/cfc26, mp4s encoded
+# locally. Everything lands in $MOLMO_DATA_DIR/video_datasets/video_track/CFC/.
+# cfc_hf_track leads deliberately: its video set is the union of every config's
+# (all-rivers-{train,val}-v2, 2571 videos), so it makes the single pass over the
+# river tarballs and the rest then only fetch their annotations.
 CFC_DATASETS = ["cfc_hf_track"] + [
     cls.DATASET_NAME for cls in CFC_HF_CLASSES if cls.DATASET_NAME != "cfc_hf_track"]
+
 
 def download_datasets(datasets: List, n_procs: int = 8):
     failed_datasets = []
@@ -131,8 +138,10 @@ Examples:
   # Download dataset group ({", ".join(DATASET_GROUPS)})
   python {sys.argv[0]} video_tracking
 
-  # Download CFC datasets
-  python {sys.argv[0]} cfc
+  # Download the whole CFC release (annotations + frames + encoded videos,
+  # into $MOLMO_DATA_DIR/video_datasets/video_track/CFC/); ~117GB of source
+  # tarballs on a cold machine, so give it a compute node
+  python {sys.argv[0]} cfc --n-procs 16
 
   # Download with more parallel processes
   python {sys.argv[0]} text_vqa --n-procs 16

@@ -29,12 +29,12 @@ from olmo.data.cfc_hf_datasets import (
     CFCSyntheticCorrectionFullHF, CFCSyntheticCorrectionVagueHF,
     CFCSyntheticCorrectionWrongOnlyHF, CFCSyntheticCorrectionNoInfoHF,
     CFCSyntheticCorrectionIncompleteHF,
-    CFCCorrectionRealFullEasyHF, CFCCorrectionRealWrongOnlyEasyHF,
-    CFCCorrectionRealVagueEasyHF, CFCCorrectionRealNoInfoEasyHF,
-    CFCCorrectionRealFullHardHF, CFCCorrectionRealWrongOnlyHardHF,
-    CFCCorrectionRealVagueHardHF, CFCCorrectionRealNoInfoHardHF,
-    CFCCorrectionRealYoloFullHF, CFCCorrectionRealYoloWrongOnlyHF,
-    CFCCorrectionRealYoloVagueHF, CFCCorrectionRealYoloNoInfoHF,
+    CFCCorrectionMolmoHighFullHF, CFCCorrectionMolmoHighWrongOnlyHF,
+    CFCCorrectionMolmoHighVagueHF, CFCCorrectionMolmoHighNoInfoHF,
+    CFCCorrectionMolmoLowFullHF, CFCCorrectionMolmoLowWrongOnlyHF,
+    CFCCorrectionMolmoLowVagueHF, CFCCorrectionMolmoLowNoInfoHF,
+    CFCCorrectionYoloFullHF, CFCCorrectionYoloWrongOnlyHF,
+    CFCCorrectionYoloVagueHF, CFCCorrectionYoloNoInfoHF,
     CFCTextHF,
 )
 from olmo.data.dataset import Dataset
@@ -53,7 +53,17 @@ from olmo.data.text_datasets import Tulu4Filtered
 
 # TODO Mantis
 
-def get_dataset_by_name(dataset_name, split) -> Dataset:
+def get_dataset_by_name(dataset_name, split, **kwargs) -> Dataset:
+    """Build a dataset by registered name.
+
+    `kwargs` are forwarded to the dataset constructor; only the CFC hub datasets
+    accept any today (`is_eval`, to score a train split — see
+    olmo/eval/standalone_eval.py). Passing them for any other task is an error
+    rather than a silent no-op.
+    """
+    if kwargs and dataset_name not in CFC_HF_DATASETS:
+        raise TypeError(
+            f"get_dataset_by_name({dataset_name!r}) does not accept {sorted(kwargs)}")
     # Academic image datasets
     if dataset_name == "coco_2014_vqa_multi":
         return Vqa2(split)
@@ -424,8 +434,8 @@ def get_dataset_by_name(dataset_name, split) -> Dataset:
         return CharadesSTA(split=split, task="all", qa_format=True)
     ####
     if dataset_name in CFC_HF_DATASETS:
-        cls, kwargs = CFC_HF_DATASETS[dataset_name]
-        return cls(split=split, **kwargs)
+        cls, registered_kwargs = CFC_HF_DATASETS[dataset_name]
+        return cls(split=split, **dict(registered_kwargs, **kwargs))
     # mevis: track, ground, single_point_track
     if dataset_name == "mevis_track": # Uses [1,2] sampling fps by default.
         return Mevis(split=split, task="track")

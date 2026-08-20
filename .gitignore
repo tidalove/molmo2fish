@@ -56,3 +56,10 @@ site/
 checkpoints/
 uv.lock
 notebooks
+# local data, results, and checkpoints (see README)
+/data/
+/results/
+/Molmo2-8B
+/Molmo2Fish-HF/
+debug.log
+.nfs*

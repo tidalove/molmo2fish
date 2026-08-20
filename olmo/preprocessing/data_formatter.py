@@ -658,6 +658,39 @@ def apply_keyword_prompt(prompts, example, rng, keywords=None, dbg=False):
     return apply_keywords(prompt, example, keywords)
 
 
+def build_prompt_for_inference(message: dict) -> str:
+    """Build inference prompt from a message dict (e.g., message_list[0]).
+
+    Handles style-based template selection, keyword substitution,
+    prepend field, and question override. Single source of truth
+    for inference prompt construction.
+    """
+    style = message.get('style')
+
+    if 'question' in message and message['question'] is not None:
+        return message['question']
+
+    if not style or style not in GENERAL_PROMPTS_V1:
+        raise ValueError(f"Cannot build prompt: unknown style '{style}'")
+
+    prompt_keywords = {}
+    if 'label' in message:
+        prompt_keywords['label'] = message['label']
+    sampling_fps = message.get('sampling_fps')
+    if sampling_fps and sampling_fps > 0:
+        prompt_keywords['fps'] = str(int(sampling_fps))
+    if 'input_points' in message:
+        prompt_keywords['input_points'] = message['input_points']
+
+    prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1[style], prompt_keywords, None, dbg=True)
+
+    prepend = message.get('prepend')
+    if prepend is not None:
+        prompt = prepend + prompt
+
+    return prompt
+
+
 DEMO_STYLES = [
     "point_count",
     "pointing",
@@ -1392,6 +1425,7 @@ class DataFormatter(BaseConfig):
         style = example["style"]
         label = example["label"]
         sampling_fps = example["sampling_fps"]
+        prepend = example.get("prepend", None)
         input_points = None
         scale = self._get_scale(example)
 
@@ -1406,9 +1440,14 @@ class DataFormatter(BaseConfig):
         video_info = example.get("video", {})
         timestamps = video_info.get("timestamps", None)
 
-        # Filter frames to match actual video timestamps
+        # Filter frames to match actual video timestamps. Multi-turn examples get
+        # the outer message's video dict copied onto every turn (see get_messages),
+        # so no timestamps here means there is genuinely no video attached — the
+        # text-only correction datasets (cfc_hf_text) — and there is nothing to
+        # filter against.
         frames_data = example["points"]
-        frames_data = self._filter_frames_to_video(frames_data, timestamps)
+        frames_data = (frames_data if timestamps is None
+                       else self._filter_frames_to_video(frames_data, timestamps))
         # NOTE: if frames_data is empty after filtering, we still proceed to sample initial points from original frames later
         # Output will be just "There are none." in that case
 
@@ -1461,7 +1500,8 @@ class DataFormatter(BaseConfig):
         
         # assert len(frames_data) > 0, "No frames left after filtering/sampling"
 
-        if False and "question" in example:
+        # An authored prompt (every turn of a correction trajectory) is used verbatim
+        if "question" in example:
             prompt = example["question"]
         else:
             prompt_keywords = dict(label=label)
@@ -1474,6 +1514,10 @@ class DataFormatter(BaseConfig):
                 prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1["video_point_track_per_frame_default_fps"], prompt_keywords, rng, dbg=self.debug)
             else:
                 prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1[style], prompt_keywords, rng, dbg=self.debug)
+
+        if prepend is not None:
+            prompt = prepend + prompt
+
         return prompt, output
 
     def format_video_point_track_points(self, example, initial_points):
@@ -1839,6 +1883,12 @@ class DataFormatter(BaseConfig):
                 messages = []
                 # multi-turn conversations that needs to be formatted through `get_user_prompt`
                 for turn_message in message["multi_turn_messages"]:
+                    # The loaded video's timestamps/target_fps live on the outer
+                    # message; copy them onto each turn so per-turn point
+                    # formatting can filter to real frames. Without this every
+                    # turn looks text-only.
+                    if isinstance(message.get("video"), dict):
+                        turn_message = dict(turn_message, video=message["video"])
                     prompt, response, extra_metadata = self.get_user_prompt(
                         turn_message, is_training, for_inference=for_inference, rng=rng
                     )

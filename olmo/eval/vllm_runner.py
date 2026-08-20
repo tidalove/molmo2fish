@@ -278,4 +278,29 @@ def generate_predictions(llm, processor, examples, output_path, sampling_params,
             json.dump(all_predictions, f, indent=2)
         log.info(f"Saved {len(all_predictions)} predictions to {output_path}")
 
+    _warn_if_truncated(all_predictions, sampling_params)
     return all_predictions
+
+
+def _warn_if_truncated(predictions, sampling_params):
+    """Warn about predictions whose <tracks> never closed.
+
+    Such a string still parses -- the evaluator scores the tracks that made it
+    out -- so the run completes and merely reports worse numbers. Two causes,
+    which the tail of the prediction tells apart: the generation budget ran out
+    (raise --max_tokens; costs the most on the densest videos), or the model
+    degenerated into repeating one coordinate row until it hit the budget
+    (a larger budget will not help). Text-only tasks emit no <tracks> at all and
+    are left alone.
+    """
+    unclosed = [p["example_id"] for p in predictions
+                if "<tracks" in p["prediction"]
+                and not p["prediction"].rstrip().endswith("</tracks>")]
+    if not unclosed:
+        return
+    max_tokens = getattr(sampling_params, "max_tokens", None)
+    log.warning(
+        f"{len(unclosed)}/{len(predictions)} predictions have an unclosed <tracks>: they hit "
+        f"max_tokens={max_tokens} and will score too low. Check the tail of each -- a plausible "
+        f"final row means the budget was too small (raise --max_tokens), a repeated row means "
+        f"the model looped and a larger budget will not help. First few: {unclosed[:5]}")

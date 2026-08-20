@@ -1,12 +1,9 @@
 """Standalone dataset bases for the CFC hub path.
 
-Deliberately independent of the CFC and LocalTrackingDataset classes in
-academic_video_track_datasets.py: those are local additions to this fork, absent
-from upstream molmo2, so inheriting from them would tie the CFC release to a
-patched copy of a 4.6k-line file. The only symbols imported from there are ones
-that are byte-identical to upstream (checked against `upstream/main`); the two
-helpers whose local versions differ — get_image_files and encode_frames_to_video
-— are covered by patches/frame_encoding_natsort_x264.patch instead.
+Deliberately independent of the tracking dataset classes in
+academic_video_track_datasets.py: inheriting from them would tie the CFC path to
+a 4.6k-line file that is otherwise unchanged from upstream Molmo2. The only
+symbols imported from there are ones that are byte-identical to upstream.
 
 Everything the CFC hub path needs lives in olmo/data/cfc_{base,frames,hf_datasets}.py.
 Data root is $MOLMO_DATA_DIR/video_datasets/video_track/CFC/.
@@ -15,6 +12,7 @@ import json
 import logging
 import re
 from os.path import exists, join
+from pycocotools import mask as mask_utils
 
 from olmo.data.dataset import Dataset, VIDEO_DATA_HOME
 # Upstream-identical symbols only. Do not add CFC/LocalTrackingDataset here.
@@ -39,11 +37,6 @@ def points_from_masks(masks, video_fps):
     Each object's per-frame point is the centroid of its mask bbox (via
     `pycocotools.mask.toBbox`); the object index is the mask dict key.
 
-    Kept here rather than imported from olmo/eval/object_tracking_utils.py (also
-    a local addition) so loading an eval-split example needs nothing outside
-    olmo/data/cfc_*.py. The two copies must stay in sync; the CFC eval metrics
-    still live in olmo/eval/.
-
     Args:
         masks: {mask_idx_str: [rle_or_None per frame]} (all lists same length).
         video_fps: frames-per-second used to set each frame's `time`.
@@ -52,7 +45,6 @@ def points_from_masks(masks, video_fps):
         [{'frame', 'time', 'points': {obj_idx: {'point': [x, y], 'occluded': False}}}],
         one entry per frame, or [] if `masks` is empty.
     """
-    from pycocotools import mask as mask_utils
     if not masks:
         return []
     n_frames = len(next(iter(masks.values())))
@@ -72,11 +64,7 @@ def points_from_masks(masks, video_fps):
 
 
 class CFCDatasetBase(Dataset):
-    """Single-turn CFC tracking dataset (point tracks over a 6 fps sonar clip).
-
-    Subclasses provide `load()`, returning rows with at least id/video/expression/
-    width/height/fps/mask_id/frame_trajectories.
-    """
+    """Single-turn CFC tracking dataset (point tracks over a 6 fps sonar clip)."""
 
     DATASET_NAME = None
     VIDEO_HOME = CFC_VIDEO_HOME
@@ -85,7 +73,8 @@ class CFCDatasetBase(Dataset):
     EXPRESSION = "fish"
     SPLIT_MAP = {}
 
-    def __init__(self, split, task, sampling_fps=None, use_fps_sampling=True):
+    def __init__(self, split, task, sampling_fps=None, use_fps_sampling=True,
+                 is_eval=None):
         assert task in TRACKING_TASKS, f"Invalid task: {task}"
         assert task in self.TASKS, \
             f"Task '{task}' not supported for {self.DATASET_NAME}. Available: {self.TASKS}"
@@ -95,8 +84,11 @@ class CFCDatasetBase(Dataset):
         self.task = task
         self.sampling_fps = sampling_fps
         self.use_fps_sampling = use_fps_sampling
-        # train-v2 and friends are training splits, everything else is eval
-        self.is_eval = not (split == "train" or split.startswith("train-"))
+        # Controls only whether get() attaches GT (masks/points/mask_id) to
+        # metadata, never the prompt. Defaults to "eval on anything but train",
+        # but scoring a train split is legitimate (the masks are on the hub for
+        # every split), so callers can force it — see olmo/eval/standalone_eval.py.
+        self.is_eval = (split != "train") if is_eval is None else is_eval
         self.data_split = self.SPLIT_MAP[split]
         self.video_home = self._get_home(self.data_split)
         self.video_dir = self._get_video_dir(self.data_split)
@@ -193,9 +185,9 @@ class CFCDatasetBase(Dataset):
     def get(self, idx, rng):
         ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
 
-        # self.sampling_fps is set explicitly (e.g. 2 for eval); None = "resolve
-        # from the loaded video". _create_message_list reads this.
-        ex['sampling_fps'] = self.sampling_fps
+        # Fall back to the row's own cadence
+        sampling_fps = self.sampling_fps or ex.get('sampling_fps')
+        ex['sampling_fps'] = sampling_fps  # _create_message_list reads this
 
         video_path = join(self.video_dir, ex['video'] + '.mp4')
         message_list = self._create_message_list(ex)
@@ -207,7 +199,7 @@ class CFCDatasetBase(Dataset):
             'w': ex['width'],
             'h': ex['height'],
             'video_fps': ex.get('fps', self.VIDEO_FPS),
-            'sampling_fps': self.sampling_fps,
+            'sampling_fps': sampling_fps,
             'video': ex['video'],
         }
 
@@ -216,15 +208,15 @@ class CFCDatasetBase(Dataset):
                 'frame_sample_mode': 'fps',
                 'candidate_sampling_fps': self._get_candidate_fps(
                     ex.get('fps', self.VIDEO_FPS)),
-                'min_fps': self.sampling_fps or 1,
+                'min_fps': sampling_fps or 1,
             }
 
         item = {
             'video': video_path,
             'message_list': message_list,
-            'sampling_fps': self.sampling_fps,
+            'sampling_fps': sampling_fps,
             'metadata': metadata,
-            'fps': str(self.sampling_fps) if self.sampling_fps else None,
+            'fps': str(sampling_fps) if sampling_fps else None,
             'label': ex['expression']
         }
 
@@ -239,12 +231,7 @@ class CFCDatasetBase(Dataset):
 
 
 class CFCMultiTurnBase(CFCDatasetBase):
-    """Multi-turn CFC correction dataset: one message per correction step.
-
-    Rows carry prompts_list / points_list (turn-aligned) instead of a single set
-    of frame trajectories. `HAS_VIDEO = False` gives the text-only variant, whose
-    examples have no video attached.
-    """
+    """Multi-turn CFC correction dataset: one message per correction step."""
 
     HAS_VIDEO = True
 
@@ -268,9 +255,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
 
         Handles single ('frame N', 'frames N'), range ('frames N to M',
         'frame N and M', 'frames N-M', 'frames N–M', 'frames N through M') and
-        comma-list ('frames N, M, and K') phrasings. Surrounding prepositions
-        (at/around/from/between) and the separators (to/and/through/until/-/–/,)
-        are preserved; only the 'frame(s)' word and the numbers are rewritten.
+        comma-list ('frames N, M, and K') phrasings.
         """
         def _secs(d):
             return f"{round(int(d.group()) / fps)}s"
@@ -319,8 +304,12 @@ class CFCMultiTurnBase(CFCDatasetBase):
         return message_list
 
     def get(self, idx, rng):
-        ex = self.data[idx]
+        ex = dict(self.data[idx])  # shallow copy — don't mutate cached data
         video_fps = ex.get("fps", self.VIDEO_FPS)
+        # Same rule as CFCDatasetBase.get: constructor value wins, row is the
+        # fallback. Correction rows always carry their own sampling_fps.
+        sampling_fps = self.sampling_fps or ex.get('sampling_fps')
+        ex['sampling_fps'] = sampling_fps
         message_list = self._create_message_list(ex)
 
         metadata = {
@@ -330,7 +319,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
             'w': ex['width'],
             'h': ex['height'],
             'video_fps': video_fps,
-            'sampling_fps': self.sampling_fps,
+            'sampling_fps': sampling_fps,
         }
         if self.HAS_VIDEO:
             metadata['video'] = ex['video']
@@ -339,7 +328,7 @@ class CFCMultiTurnBase(CFCDatasetBase):
             metadata['sampler_overrides'] = {
                 'frame_sample_mode': 'fps',
                 'candidate_sampling_fps': self._get_candidate_fps(video_fps),
-                'min_fps': ex['sampling_fps'],
+                'min_fps': sampling_fps,
             }
 
         if self.is_eval:
@@ -351,22 +340,15 @@ class CFCMultiTurnBase(CFCDatasetBase):
             metadata['masks'] = self._read_masks(ex['id'], "0.json")
 
             # Derive eval GT points from the masks so their object-slot order matches
-            # the masks used for validation. points_list[-1] (the source final step) is
-            # indexed by enumerate(sorted(track_ids)), which disagrees with the
-            # full-video MasksRLE slot order whenever masks are hardlinked from a
-            # differently-ordered source (real / kenai-channel corrections) — that
-            # permutation otherwise corrupts detection/HOTA. No-op where the two already
-            # agree (e.g. synthetic). Only the eval GT (metadata.points) is rebuilt;
-            # multi_turn_messages (model input) and initial_points (step-0 start) are
-            # left untouched.
+            # the masks used for validation.
             if metadata['masks']:
                 metadata['points'] = points_from_masks(metadata['masks'], video_fps)
 
         item = {
             'multi_turn_messages': message_list,
-            'sampling_fps': ex['sampling_fps'],
+            'sampling_fps': sampling_fps,
             'metadata': metadata,
-            'fps': str(ex['sampling_fps']),
+            'fps': str(sampling_fps) if sampling_fps else None,
             'label': ex['expression']
         }
         if self.HAS_VIDEO:
