@@ -36,6 +36,7 @@ dependencies = [
     "tqdm",
     "gcsfs==2023.9.2",
     "accelerate",
+    "pycocotools",
 
     # These are all video libraries (all of which use FFMEGP) we have used at one point
     # we largely use trochcodec now, but some older preprocessing scripts use other libraries
